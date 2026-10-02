@@ -32,6 +32,11 @@ export function encodeNoteState(doc: Y.Doc) {
   return Y.encodeStateAsUpdate(doc);
 }
 
+export function encodeNoteStateSince(doc: Y.Doc, stateVector: Uint8Array) {
+  assertNoteDocument(doc);
+  return Y.encodeStateAsUpdate(doc, stateVector);
+}
+
 export function applyNoteUpdate(doc: Y.Doc, update: Uint8Array) {
   Y.applyUpdate(doc, update);
   assertNoteDocument(doc);

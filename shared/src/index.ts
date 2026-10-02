@@ -48,6 +48,7 @@ export {
   createNoteDocument,
   DOCUMENT_SCHEMA_VERSION,
   encodeNoteState,
+  encodeNoteStateSince,
   NOTE_CONTENT_NAME,
   NOTE_ROOT_NAME,
 } from './document.js';

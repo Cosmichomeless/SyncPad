@@ -2,7 +2,9 @@ import { createServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
+import type WebSocket from 'ws';
 import type { HealthResponse } from '@syncpad/shared';
+import { applyNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
 import { applyCors, isAllowedOrigin, rejectCors, type SecurityConfig } from './security.js';
@@ -18,6 +20,23 @@ function cookieValue(header: string | undefined, name: string) {
 
 function rejectUpgrade(socket: Duplex, status: number) {
   socket.end(`HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Forbidden'}\r\nConnection: close\r\n\r\n`);
+}
+
+type RoomMessage =
+  | { type: 'sync-request'; stateVector?: string }
+  | { type: 'update'; update: string };
+
+type NoteRoom = {
+  document: ReturnType<typeof createNoteDocument>;
+  clients: Set<WebSocket>;
+};
+
+function encode(data: Uint8Array) {
+  return Buffer.from(data).toString('base64');
+}
+
+function decode(value: string) {
+  return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
 export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService } = {}) {
@@ -69,6 +88,15 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     res.writeHead(404).end();
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+  const rooms = new Map<string, NoteRoom>();
+  const getRoom = (noteId: string) => {
+    let room = rooms.get(noteId);
+    if (!room) {
+      room = { document: createNoteDocument(), clients: new Set() };
+      rooms.set(noteId, room);
+    }
+    return room;
+  };
   let closing: Promise<void> | undefined;
   server.on('connection', (socket) => {
     sockets.add(socket);
@@ -103,7 +131,39 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         }
       }
       wss.handleUpgrade(req, socket, head, (client) => {
-        // No messages are interpreted until the versioned sync protocol is added.
+        if (!options.auth || !options.notes) {
+          client.on('error', () => client.terminate());
+          return;
+        }
+        const noteId = new URL(req.url ?? '/ws', `http://${req.headers.host ?? 'localhost'}`).searchParams.get('noteId');
+        const room = noteId ? getRoom(noteId) : undefined;
+        if (!room) {
+          client.close(1008, 'noteId is required');
+          return;
+        }
+        room.clients.add(client);
+        client.send(JSON.stringify({ type: 'sync', update: encode(encodeNoteState(room.document.doc)) }));
+        client.on('message', (raw) => {
+          try {
+            const message = JSON.parse(raw.toString()) as RoomMessage;
+            if (message.type === 'sync-request') {
+              const update = message.stateVector
+                ? encodeNoteStateSince(room.document.doc, decode(message.stateVector))
+                : encodeNoteState(room.document.doc);
+              client.send(JSON.stringify({ type: 'sync', update: encode(update) }));
+              return;
+            }
+            if (message.type === 'update') {
+              const update = decode(message.update);
+              applyNoteUpdate(room.document.doc, update);
+              const payload = JSON.stringify({ type: 'update', update: message.update });
+              for (const peer of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
+            }
+          } catch {
+            client.close(1003, 'Invalid sync message');
+          }
+        });
+        client.once('close', () => room.clients.delete(client));
         client.on('error', () => client.terminate());
       });
     })().catch(() => rejectUpgrade(socket, 403));
