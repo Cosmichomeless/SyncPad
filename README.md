@@ -94,3 +94,32 @@ npm --prefix backend start
 ```
 
 Evidencia y límites: [entrega de #2](docs/issues/002-backend.md).
+
+## PostgreSQL local (#3)
+
+Requisitos adicionales: Docker Desktop con Docker Compose, o PostgreSQL 14 o
+posterior instalado localmente.
+
+Para iniciar la base de datos incluida:
+
+```sh
+docker compose up -d postgres
+```
+
+La conexión local por defecto es
+`postgres://syncpad:syncpad@127.0.0.1:5432/syncpad`. El backend acepta una URL
+distinta mediante `DATABASE_URL`; `HOST` y `PORT` siguen controlando el servidor
+HTTP/WebSocket. La base de datos todavía solo prepara la infraestructura local:
+las tablas de aplicación se añadirán mediante las migraciones de #4.
+
+Para detener el servicio sin borrar los datos:
+
+```sh
+docker compose stop postgres
+```
+
+Para eliminar también el volumen local:
+
+```sh
+docker compose down -v
+```
