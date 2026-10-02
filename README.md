@@ -258,3 +258,6 @@ las cookies; en producción las cookies Secure se activan por defecto.
 La portada permite registrarse, entrar, crear y seleccionar workspaces, y crear,
 listar y abrir notas. El editor colaborativo se conectará cuando se complete la
 sincronización Yjs de #18–#22.
+
+La edición básica de una nota ya usa el documento Yjs y la sala WebSocket, con
+estado de conexión visible; el alcance está en [docs/issues/022-yjs-editor.md](docs/issues/022-yjs-editor.md).
