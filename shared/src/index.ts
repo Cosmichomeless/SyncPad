@@ -41,3 +41,14 @@ export type SyncHandshake = {
   workspaceId: WorkspaceId;
   noteId: NoteId;
 };
+
+export {
+  applyNoteUpdate,
+  assertNoteDocument,
+  createNoteDocument,
+  DOCUMENT_SCHEMA_VERSION,
+  encodeNoteState,
+  NOTE_CONTENT_NAME,
+  NOTE_ROOT_NAME,
+} from './document.js';
+export type { NoteDocument } from './document.js';

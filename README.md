@@ -230,6 +230,12 @@ operaciones sobre workspaces ajenos se rechazan.
 Las invariantes de aislamiento y las pruebas de roles están documentadas en
 [docs/issues/017-isolation-tests.md](docs/issues/017-isolation-tests.md).
 
+## Documentos Yjs (#18)
+
+El esquema compartido versionado vive en `shared/src/document.ts`: cada nota
+contiene `schemaVersion` y `content`; el título sigue en PostgreSQL. Las
+actualizaciones incompatibles se rechazan para permitir migraciones explícitas.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
