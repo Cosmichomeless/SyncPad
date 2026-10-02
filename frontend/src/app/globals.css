@@ -1,0 +1,43 @@
+:root {
+  color-scheme: light;
+  background: #f4f6f8;
+  color: #172c3b;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 48rem;
+  margin: 0 auto;
+  padding: clamp(2rem, 8vw, 6rem) 1.5rem;
+}
+
+h1 {
+  margin: 1rem 0;
+  font-size: clamp(2.5rem, 8vw, 4rem);
+  line-height: 1.1;
+}
+
+p {
+  font-size: 1.125rem;
+  line-height: 1.7;
+}
+
+.eyebrow {
+  color: #355b6b;
+  font-weight: 600;
+}
+
+.status {
+  margin-top: 2rem;
+  padding: 1rem 1.25rem;
+  border-left: 0.25rem solid #355b6b;
+  background: #e7edf1;
+}
