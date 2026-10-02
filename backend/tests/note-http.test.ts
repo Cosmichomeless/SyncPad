@@ -23,6 +23,7 @@ async function fixture() {
     async listForUser(userId) { return userId === 'user-1' ? [note] : null; },
     async rename(userId) { return userId === 'user-1' ? { ...note, title: 'Renamed' } : null; },
     async delete(userId) { return userId === 'user-1'; },
+    async canAccess(userId) { return userId === 'user-1'; },
   };
   const app = createSyncServer({ auth, notes, security: loadSecurityConfig({}) });
   app.server.listen(0, '127.0.0.1');

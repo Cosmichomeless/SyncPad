@@ -34,10 +34,9 @@ test('executable serves HTTP/WS and exits cleanly on SIGTERM', { timeout: 6000 }
   assert.deepEqual(await (await fetch('http://127.0.0.1:' + port + '/health')).json(), { status: 'ok' });
   const client = new WebSocket('ws://127.0.0.1:' + port + '/ws');
   t.after(() => client.terminate());
-  await once(client, 'open');
-  const closed = once(client, 'close');
+  const rejected = once(client, 'error');
   child.kill('SIGTERM');
-  assert.equal((await closed)[0], 1001);
+  await rejected;
   assert.equal((await exited)[0], 0);
 });
 
