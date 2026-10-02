@@ -233,3 +233,9 @@ El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
 requieren el token de `GET /auth/csrf` en la cookie `syncpad_csrf` y en la cabecera
 `X-CSRF-Token`. `COOKIE_SECURE` y `COOKIE_SAME_SITE` controlan los atributos de
 las cookies; en producción las cookies Secure se activan por defecto.
+
+## UI de workspace (#16)
+
+La portada permite registrarse, entrar, crear y seleccionar workspaces, y crear,
+listar y abrir notas. El editor colaborativo se conectará cuando se complete la
+sincronización Yjs de #18–#22.
