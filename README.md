@@ -136,3 +136,14 @@ El runner crea `schema_migrations`, aplica los archivos SQL de
 `backend/migrations/` en orden lexicográfico y registra cada archivo aplicado
 dentro de la misma transacción. Repetir el comando es seguro y no vuelve a
 ejecutar migraciones ya registradas.
+
+## Contratos compartidos (#5)
+
+Los tipos públicos viven en `shared/src/index.ts` y se importan desde el backend
+y el frontend. Incluyen IDs nominales para usuarios, workspaces y notas, las
+respuestas de health/error, resúmenes de entidades y el handshake de sincronización.
+La constante `SYNC_PROTOCOL_VERSION` fija la versión inicial del protocolo en `1`.
+
+Estos contratos describen la API pública, pero no representan todavía tablas,
+autenticación ni contenido Yjs. Los cambios incompatibles deberán incrementar la
+versión del protocolo y documentar la migración.
