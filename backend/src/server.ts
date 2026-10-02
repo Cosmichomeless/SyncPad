@@ -36,7 +36,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       });
       return;
     }
-    if (options.auth && options.workspaces && req.url?.startsWith('/workspaces')) {
+    if (options.auth && options.workspaces && (req.url?.startsWith('/workspaces') || req.url?.startsWith('/invitations'))) {
       void handleWorkspaceRequest(req, res, options.auth, options.workspaces).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
