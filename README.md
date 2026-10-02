@@ -227,6 +227,9 @@ La API CRUD de notas está documentada en [docs/issues/015-note-crud.md](docs/is
 los miembros pueden crear/listar y renombrar/borrar notas, mientras que las
 operaciones sobre workspaces ajenos se rechazan.
 
+Las invariantes de aislamiento y las pruebas de roles están documentadas en
+[docs/issues/017-isolation-tests.md](docs/issues/017-isolation-tests.md).
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
