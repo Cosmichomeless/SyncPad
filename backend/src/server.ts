@@ -5,8 +5,10 @@ import type { HealthResponse } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
 import { applyCors, isAllowedOrigin, rejectCors, type SecurityConfig } from './security.js';
+import { handleWorkspaceRequest } from './workspace-http.js';
+import type { WorkspaceService } from './workspaces.js';
 
-export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService } = {}) {
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     const origin = req.headers.origin;
@@ -30,6 +32,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         cookieSecure: false,
         cookieSameSite: 'Lax',
       }).catch(() => {
+        if (!res.headersSent) res.writeHead(500).end();
+      });
+      return;
+    }
+    if (options.auth && options.workspaces && req.url?.startsWith('/workspaces')) {
+      void handleWorkspaceRequest(req, res, options.auth, options.workspaces).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
       return;

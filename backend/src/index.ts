@@ -3,13 +3,18 @@ import { createAuthService } from './auth.js';
 import { createDatabasePool } from './database.js';
 import { createSyncServer } from './server.js';
 import { loadSecurityConfig } from './security.js';
+import { createWorkspaceService } from './workspaces.js';
 
 try {
   const config = loadConfig(process.env);
   const { host, port } = config;
   const security = loadSecurityConfig(process.env);
   const database = createDatabasePool(config.databaseUrl);
-  const app = createSyncServer({ auth: createAuthService(database), security });
+  const app = createSyncServer({
+    auth: createAuthService(database),
+    security,
+    workspaces: createWorkspaceService(database),
+  });
   const shutdown = () => {
     void app.close().then(() => database.end()).catch(() => {
       console.error('SyncPad shutdown failed');

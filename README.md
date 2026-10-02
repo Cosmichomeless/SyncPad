@@ -207,6 +207,10 @@ La migración `003-workspaces.sql` crea workspaces y memberships con roles `OWNE
 y `MEMBER`. Crear un workspace asigna automáticamente al creador como `OWNER` y
 la pareja workspace/usuario es única.
 
+La API autenticada ofrece `POST /workspaces`, `GET /workspaces` y
+`GET /workspaces/:id`; el listado y el detalle solo devuelven memberships del
+usuario actual y la creación requiere CSRF.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
