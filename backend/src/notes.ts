@@ -10,6 +10,7 @@ export interface NoteService {
     listForUser(userId: UserId, workspaceId: WorkspaceId): Promise<NoteRecord[] | null>;
     rename(userId: UserId, noteId: NoteId, title: string): Promise<NoteRecord | null>;
     delete(userId: UserId, noteId: NoteId): Promise<boolean>;
+    canAccess(userId: UserId, noteId: NoteId): Promise<boolean>;
 }
 
 export class NoteTitleError extends Error {
@@ -113,6 +114,18 @@ export function createNoteService(database: SqlExecutor): NoteService {
              WHERE workspace_id = notes.workspace_id AND user_id = $2
            )
          RETURNING id`,
+                [noteId, userId],
+            );
+            return Boolean(result.rows[0]);
+        },
+
+        async canAccess(userId: UserId, noteId: NoteId) {
+            const result = await database.query(
+                `SELECT 1 FROM syncpad.notes
+                 INNER JOIN syncpad.memberships
+                     ON memberships.workspace_id = notes.workspace_id
+                    AND memberships.user_id = $2
+                 WHERE notes.id = $1`,
                 [noteId, userId],
             );
             return Boolean(result.rows[0]);

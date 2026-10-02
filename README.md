@@ -236,6 +236,10 @@ El esquema compartido versionado vive en `shared/src/document.ts`: cada nota
 contiene `schemaVersion` y `content`; el título sigue en PostgreSQL. Las
 actualizaciones incompatibles se rechazan para permitir migraciones explícitas.
 
+El endpoint WebSocket autoriza la sala mediante cookie de sesión, `noteId` y
+membership antes de aceptar el upgrade; este límite está documentado en
+[docs/issues/019-websocket-authorization.md](docs/issues/019-websocket-authorization.md).
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso

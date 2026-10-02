@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type { HealthResponse } from '@syncpad/shared';
@@ -9,6 +10,15 @@ import { handleWorkspaceRequest } from './workspace-http.js';
 import type { WorkspaceService } from './workspaces.js';
 import { handleNoteRequest } from './note-http.js';
 import type { NoteService } from './notes.js';
+import { isNoteId } from './notes.js';
+
+function cookieValue(header: string | undefined, name: string) {
+  return header?.split(';').map((part) => part.trim()).find((part) => part.startsWith(name + '='))?.slice(name.length + 1);
+}
+
+function rejectUpgrade(socket: Duplex, status: number) {
+  socket.end(`HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Forbidden'}\r\nConnection: close\r\n\r\n`);
+}
 
 export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService } = {}) {
   const sockets = new Set<Socket>();
@@ -65,14 +75,38 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     socket.on('close', () => sockets.delete(socket));
   });
   server.on('upgrade', (req, socket, head) => {
-    if (closing || req.url !== '/ws' || (options.security && !isAllowedOrigin(req.headers.origin, options.security))) {
-      socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, (client) => {
-      // No messages are interpreted until the versioned sync protocol is added.
-      client.on('error', () => client.terminate());
-    });
+    void (async () => {
+      if (closing || (options.security && !isAllowedOrigin(req.headers.origin, options.security))) {
+        rejectUpgrade(socket, 403);
+        return;
+      }
+      if (req.url?.split('?')[0] !== '/ws') {
+        socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      if (options.auth && options.notes) {
+        const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+        const noteId = url.searchParams.get('noteId');
+        const token = cookieValue(req.headers.cookie, 'syncpad_session');
+        if (!token || !noteId || !isNoteId(noteId)) {
+          rejectUpgrade(socket, 401);
+          return;
+        }
+        const user = await options.auth.getUserBySession(decodeURIComponent(token));
+        if (!user) {
+          rejectUpgrade(socket, 401);
+          return;
+        }
+        if (!(await options.notes.canAccess(user.id, noteId))) {
+          rejectUpgrade(socket, 403);
+          return;
+        }
+      }
+      wss.handleUpgrade(req, socket, head, (client) => {
+        // No messages are interpreted until the versioned sync protocol is added.
+        client.on('error', () => client.terminate());
+      });
+    })().catch(() => rejectUpgrade(socket, 403));
   });
   function close(): Promise<void> {
     closing ??= new Promise<void>((resolve, reject) => {
