@@ -211,6 +211,11 @@ La API autenticada ofrece `POST /workspaces`, `GET /workspaces` y
 `GET /workspaces/:id`; el listado y el detalle solo devuelven memberships del
 usuario actual y la creación requiere CSRF.
 
+Los OWNER pueden invitar y eliminar miembros mediante las rutas documentadas en
+[docs/issues/013-member-invitations.md](docs/issues/013-member-invitations.md).
+Las invitaciones expiran, solo se aceptan una vez y no permiten eliminar al
+último OWNER.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso

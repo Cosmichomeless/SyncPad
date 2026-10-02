@@ -21,6 +21,9 @@ function fixture() {
     async create() { return workspace; },
     async listForUser(userId) { return userId === user.id ? [workspace] : []; },
     async getForUser(userId, workspaceId) { return userId === user.id && workspaceId === workspace.id ? workspace : null; },
+    async invite() { return { workspaceId: workspace.id, email: 'member@example.com', token: 'invite-token' }; },
+    async acceptInvitation() { return workspace.id; },
+    async removeMember() {},
   };
   const app = createSyncServer({ auth, workspaces, security: loadSecurityConfig({}) });
   app.server.listen(0, '127.0.0.1');
@@ -46,4 +49,22 @@ test('unauthenticated users cannot list or open workspaces', { timeout: 3000 }, 
   t.after(() => app.close());
   assert.equal((await fetch(url + '/workspaces')).status, 401);
   assert.equal((await fetch(url + '/workspaces/not-a-uuid')).status, 401);
+});
+
+test('workspace owner can invite, accept and remove members through HTTP', { timeout: 3000 }, async (t) => {
+  const { app, url } = await fixture();
+  t.after(() => app.close());
+  const csrf = await fetch(url + '/auth/csrf');
+  const csrfToken = (await csrf.json() as { csrfToken: string }).csrfToken;
+  const csrfCookie = csrf.headers.get('set-cookie')?.split(';', 1)[0] ?? '';
+  const headers = { cookie: `syncpad_session=session-token; ${csrfCookie}`, 'x-csrf-token': csrfToken };
+  const invite = await fetch(url + '/workspaces/' + workspace.id + '/invitations', {
+    method: 'POST',
+    headers: { ...headers, 'content-type': 'application/json' },
+    body: JSON.stringify({ email: 'member@example.com' }),
+  });
+  assert.equal(invite.status, 201);
+  assert.equal((await invite.json()).invitation.token, 'invite-token');
+  assert.equal((await fetch(url + '/invitations/invite-token/accept', { method: 'POST', headers })).status, 200);
+  assert.equal((await fetch(url + '/workspaces/' + workspace.id + '/members/user-2', { method: 'DELETE', headers })).status, 204);
 });
