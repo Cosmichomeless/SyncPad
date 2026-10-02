@@ -240,6 +240,9 @@ El endpoint WebSocket autoriza la sala mediante cookie de sesión, `noteId` y
 membership antes de aceptar el upgrade; este límite está documentado en
 [docs/issues/019-websocket-authorization.md](docs/issues/019-websocket-authorization.md).
 
+Las salas intercambian state vectors, snapshots Yjs y actualizaciones
+incrementales según [docs/issues/020-yjs-sync.md](docs/issues/020-yjs-sync.md).
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
