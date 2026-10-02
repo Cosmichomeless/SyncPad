@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AuthService } from './auth.js';
+import { cookieAttributes, createCsrfToken, csrfCookie, hasValidCsrf, type SecurityConfig } from './security.js';
 
 const SESSION_COOKIE = 'syncpad_session';
 const MAX_BODY_BYTES = 16 * 1024;
 
-function sendJson(response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) {
+function sendJson(response: ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}) {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
   response.end(JSON.stringify(body));
 }
@@ -33,25 +34,39 @@ async function readJson(request: IncomingMessage): Promise<{ email?: unknown; pa
   return parsed as { email?: unknown; password?: unknown };
 }
 
-function sessionCookie(token: string) {
-  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Lax`;
+function sessionCookie(token: string, security: SecurityConfig) {
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)};${cookieAttributes(security, true)}`;
 }
 
-function clearedSessionCookie() {
-  return `${SESSION_COOKIE}=; Max-Age=0; HttpOnly; Path=/; SameSite=Lax`;
+function clearedSessionCookie(security: SecurityConfig) {
+  return `${SESSION_COOKIE}=; Max-Age=0;${cookieAttributes(security, true)}`;
 }
 
 function userResponse(user: { id: string; email: string }) {
   return { user };
 }
 
-export async function handleAuthRequest(request: IncomingMessage, response: ServerResponse, auth: AuthService) {
+export async function handleAuthRequest(request: IncomingMessage, response: ServerResponse, auth: AuthService, security: SecurityConfig) {
   const path = request.url?.split('?')[0];
   if (!path?.startsWith('/auth/')) return false;
+
+  if (path === '/auth/csrf') {
+    if (request.method !== 'GET') {
+      sendJson(response, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } });
+      return true;
+    }
+    const token = createCsrfToken();
+    sendJson(response, 200, { csrfToken: token }, { 'set-cookie': csrfCookie(token, security) });
+    return true;
+  }
 
   if (path === '/auth/register' || path === '/auth/login') {
     if (request.method !== 'POST') {
       sendJson(response, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } });
+      return true;
+    }
+    if (!hasValidCsrf(request)) {
+      sendJson(response, 403, { error: { code: 'CSRF_REQUIRED', message: 'Valid CSRF token required' } });
       return true;
     }
     try {
@@ -66,7 +81,7 @@ export async function handleAuthRequest(request: IncomingMessage, response: Serv
       }
       const token = await auth.createSession(user.id);
       sendJson(response, path === '/auth/register' ? 201 : 200, userResponse(user), {
-        'set-cookie': sessionCookie(token),
+        'set-cookie': sessionCookie(token, security),
       });
     } catch (error) {
       const duplicate = error instanceof Error && error.name === 'EmailAlreadyRegisteredError';
@@ -97,9 +112,13 @@ export async function handleAuthRequest(request: IncomingMessage, response: Serv
       sendJson(response, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' } });
       return true;
     }
+    if (!hasValidCsrf(request)) {
+      sendJson(response, 403, { error: { code: 'CSRF_REQUIRED', message: 'Valid CSRF token required' } });
+      return true;
+    }
     const token = parseCookies(request.headers.cookie).get(SESSION_COOKIE);
     if (token) await auth.invalidateSession(token);
-    response.writeHead(204, { 'set-cookie': clearedSessionCookie(), 'cache-control': 'no-store' });
+    response.writeHead(204, { 'set-cookie': clearedSessionCookie(security), 'cache-control': 'no-store' });
     response.end();
     return true;
   }

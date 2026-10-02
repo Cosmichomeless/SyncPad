@@ -200,3 +200,10 @@ Con el backend y las migraciones activos, las rutas disponibles son:
 
 La cookie es HttpOnly y SameSite=Lax en esta etapa. La política completa para
 producción, CSRF y CORS pertenece a #10.
+
+## Cookies, CSRF y CORS (#10)
+
+El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
+requieren el token de `GET /auth/csrf` en la cookie `syncpad_csrf` y en la cabecera
+`X-CSRF-Token`. `COOKIE_SECURE` y `COOKIE_SAME_SITE` controlan los atributos de
+las cookies; en producción las cookies Secure se activan por defecto.
