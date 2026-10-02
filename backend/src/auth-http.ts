@@ -20,6 +20,10 @@ function parseCookies(header: string | undefined) {
   return cookies;
 }
 
+export function getSessionToken(request: IncomingMessage) {
+  return parseCookies(request.headers.cookie).get(SESSION_COOKIE);
+}
+
 async function readJson(request: IncomingMessage): Promise<{ email?: unknown; password?: unknown }> {
   let size = 0;
   const chunks: Buffer[] = [];

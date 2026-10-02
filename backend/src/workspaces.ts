@@ -8,6 +8,12 @@ export type WorkspaceRecord = WorkspaceSummary & {
   createdBy: UserId;
 };
 
+export interface WorkspaceService {
+  create(userId: UserId, name: string): Promise<WorkspaceRecord>;
+  listForUser(userId: UserId): Promise<WorkspaceRecord[]>;
+  getForUser(userId: UserId, workspaceId: WorkspaceId): Promise<WorkspaceRecord | null>;
+}
+
 export class WorkspaceNameError extends Error {
   constructor() {
     super('Workspace name must contain between 1 and 120 characters');
@@ -30,7 +36,7 @@ function toWorkspace(row: { id: string; name: string; updated_at: string | Date;
   };
 }
 
-export function createWorkspaceService(database: SqlExecutor) {
+export function createWorkspaceService(database: SqlExecutor): WorkspaceService {
   return {
     async create(userId: UserId, name: string): Promise<WorkspaceRecord> {
       const result = await database.query<{
