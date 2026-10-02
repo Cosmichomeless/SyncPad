@@ -170,3 +170,9 @@ Para ejecutar las comprobaciones de ambos módulos:
 ```sh
 ./scripts/check.sh
 ```
+
+## Arquitectura y puesta en marcha (#7)
+
+La descripción de componentes, responsabilidades, tipos de estado y flujo local
+está en [docs/architecture.md](docs/architecture.md). Distingue explícitamente
+los datos persistentes de la presencia efímera y marca qué partes son futuras.
