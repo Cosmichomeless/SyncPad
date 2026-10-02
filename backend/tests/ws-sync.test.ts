@@ -28,8 +28,14 @@ async function fixture() {
   return { app, url: `ws://127.0.0.1:${(app.server.address() as { port: number }).port}/ws?noteId=${noteId}` };
 }
 
-function receive(client: WebSocket) {
-  return once(client, 'message').then(([raw]) => JSON.parse(raw.toString()) as { type: string; update: string });
+function receive(client: WebSocket, expectedType: string) {
+  return new Promise<{ type: string; update: string }>((resolve) => {
+    const onMessage = (raw: WebSocket.RawData) => {
+      const message = JSON.parse(raw.toString()) as { type: string; update: string };
+      if (message.type === expectedType) { client.off('message', onMessage); resolve(message); }
+    };
+    client.on('message', onMessage);
+  });
 }
 
 test('two clients exchange initial state and incremental updates', { timeout: 4000 }, async (t) => {
@@ -39,8 +45,8 @@ test('two clients exchange initial state and incremental updates', { timeout: 40
   const first = new WebSocket(url, options);
   const second = new WebSocket(url, options);
   t.after(() => { first.terminate(); second.terminate(); });
-  const firstSyncPromise = receive(first);
-  const secondSyncPromise = receive(second);
+  const firstSyncPromise = receive(first, 'sync');
+  const secondSyncPromise = receive(second, 'sync');
   await Promise.all([once(first, 'open'), once(second, 'open')]);
   const firstSync = await firstSyncPromise;
   const secondSync = await secondSyncPromise;
@@ -49,7 +55,7 @@ test('two clients exchange initial state and incremental updates', { timeout: 40
   const local = createNoteDocument();
   local.content.insert(0, 'convergencia');
   first.send(JSON.stringify({ type: 'update', update: Buffer.from(encodeNoteState(local.doc)).toString('base64') }));
-  const update = await receive(second);
+  const update = await receive(second, 'update');
   const remote = createNoteDocument();
   applyNoteUpdate(remote.doc, Buffer.from(update.update, 'base64'));
   assert.equal(remote.content.toString(), 'convergencia');
