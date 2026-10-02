@@ -4,6 +4,7 @@ import { createDatabasePool } from './database.js';
 import { createSyncServer } from './server.js';
 import { loadSecurityConfig } from './security.js';
 import { createWorkspaceService } from './workspaces.js';
+import { createNoteService } from './notes.js';
 
 try {
   const config = loadConfig(process.env);
@@ -14,6 +15,7 @@ try {
     auth: createAuthService(database),
     security,
     workspaces: createWorkspaceService(database),
+    notes: createNoteService(database),
   });
   const shutdown = () => {
     void app.close().then(() => database.end()).catch(() => {

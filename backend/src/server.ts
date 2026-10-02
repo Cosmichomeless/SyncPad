@@ -7,8 +7,10 @@ import type { AuthService } from './auth.js';
 import { applyCors, isAllowedOrigin, rejectCors, type SecurityConfig } from './security.js';
 import { handleWorkspaceRequest } from './workspace-http.js';
 import type { WorkspaceService } from './workspaces.js';
+import { handleNoteRequest } from './note-http.js';
+import type { NoteService } from './notes.js';
 
-export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService } = {}) {
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     const origin = req.headers.origin;
@@ -32,6 +34,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         cookieSecure: false,
         cookieSameSite: 'Lax',
       }).catch(() => {
+        if (!res.headersSent) res.writeHead(500).end();
+      });
+      return;
+    }
+    if (options.auth && options.notes && ((req.url?.startsWith('/workspaces/') && req.url?.includes('/notes')) || req.url?.startsWith('/notes/'))) {
+      void handleNoteRequest(req, res, options.auth, options.notes).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
       return;
