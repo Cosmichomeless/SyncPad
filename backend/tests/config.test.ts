@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { loadConfig } from '../src/config.js';
+import { loadSecurityConfig } from '../src/security.js';
 
 test('configuration defaults to loopback and port 3001', () => {
   assert.deepEqual(loadConfig({}), {
@@ -27,6 +28,18 @@ for (const port of ['', '0', '-1', '65536', '1.5', '12junk', 'Infinity', ' 3001'
 }
 test('configuration rejects an empty host', () => {
   assert.throws(() => loadConfig({ HOST: '  ' }), /HOST/);
+});
+
+test('security configuration defaults to local CORS and non-secure cookies', () => {
+  assert.deepEqual(loadSecurityConfig({}), {
+    corsOrigin: 'http://127.0.0.1:3000',
+    cookieSecure: false,
+    cookieSameSite: 'Lax',
+  });
+});
+
+test('security configuration enables secure cookies in production', () => {
+  assert.equal(loadSecurityConfig({ NODE_ENV: 'production', CORS_ORIGIN: 'https://syncpad.example' }).cookieSecure, true);
 });
 for (const databaseUrl of ['', 'http://localhost/db', 'not-a-url']) {
   test('configuration rejects invalid DATABASE_URL ' + JSON.stringify(databaseUrl), () => {

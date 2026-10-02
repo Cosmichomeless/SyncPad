@@ -4,12 +4,32 @@ import { WebSocketServer } from 'ws';
 import type { HealthResponse } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
+import { applyCors, isAllowedOrigin, rejectCors, type SecurityConfig } from './security.js';
 
-export function createSyncServer(options: { auth?: AuthService } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig } = {}) {
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
+    const origin = req.headers.origin;
+    if (options.security && !isAllowedOrigin(origin, options.security)) {
+      rejectCors(res);
+      return;
+    }
+    if (options.security) {
+      applyCors(res, origin, options.security);
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, {
+          'access-control-allow-methods': 'GET,POST,OPTIONS',
+          'access-control-allow-headers': 'content-type,x-csrf-token',
+        }).end();
+        return;
+      }
+    }
     if (options.auth && req.url?.startsWith('/auth/')) {
-      void handleAuthRequest(req, res, options.auth).catch(() => {
+      void handleAuthRequest(req, res, options.auth, options.security ?? {
+        corsOrigin: 'http://127.0.0.1:3000',
+        cookieSecure: false,
+        cookieSameSite: 'Lax',
+      }).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
       return;
@@ -29,7 +49,7 @@ export function createSyncServer(options: { auth?: AuthService } = {}) {
     socket.on('close', () => sockets.delete(socket));
   });
   server.on('upgrade', (req, socket, head) => {
-    if (closing || req.url !== '/ws') {
+    if (closing || req.url !== '/ws' || (options.security && !isAllowedOrigin(req.headers.origin, options.security))) {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
