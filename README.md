@@ -188,3 +188,15 @@ npm --prefix backend run migrate
 Las contraseñas se almacenan con `scrypt` y los tokens de sesión solo se guardan
 como hashes. Las rutas de registro, login y logout se incorporan en #9; no hay
 acceso público seguro hasta completar también #10.
+
+## API de acceso (#9)
+
+Con el backend y las migraciones activos, las rutas disponibles son:
+
+- `POST /auth/register` con `{ "email", "password" }` crea una cuenta e inicia sesión.
+- `POST /auth/login` inicia sesión con credenciales existentes.
+- `GET /auth/me` devuelve el usuario de la cookie de sesión.
+- `POST /auth/logout` revoca la sesión y limpia la cookie.
+
+La cookie es HttpOnly y SameSite=Lax en esta etapa. La política completa para
+producción, CSRF y CORS pertenece a #10.

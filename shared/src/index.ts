@@ -16,6 +16,13 @@ export type ApiErrorResponse = {
   };
 };
 
+export type AuthUserResponse = {
+  user: {
+    id: UserId;
+    email: string;
+  };
+};
+
 export type WorkspaceSummary = {
   id: WorkspaceId;
   name: string;
