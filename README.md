@@ -147,3 +147,26 @@ La constante `SYNC_PROTOCOL_VERSION` fija la versión inicial del protocolo en `
 Estos contratos describen la API pública, pero no representan todavía tablas,
 autenticación ni contenido Yjs. Los cambios incompatibles deberán incrementar la
 versión del protocolo y documentar la migración.
+
+## Entorno local (#6)
+
+Copia la plantilla antes de iniciar servicios:
+
+```sh
+cp .env.example .env
+```
+
+`.env` está excluido de Git y `.env.example` solo contiene valores locales de
+ejemplo; no se guardan contraseñas reales ni tokens en el repositorio. Para
+iniciar PostgreSQL, aplicar migraciones y ejecutar el backend en modo watch:
+
+```sh
+./scripts/start-backend-local.sh
+```
+
+El frontend se ejecuta en otra terminal con `npm --prefix frontend run dev`.
+Para ejecutar las comprobaciones de ambos módulos:
+
+```sh
+./scripts/check.sh
+```
