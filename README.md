@@ -201,6 +201,12 @@ Con el backend y las migraciones activos, las rutas disponibles son:
 La cookie es HttpOnly y SameSite=Lax en esta etapa. La política completa para
 producción, CSRF y CORS pertenece a #10.
 
+## Workspaces y memberships (#11)
+
+La migración `003-workspaces.sql` crea workspaces y memberships con roles `OWNER`
+y `MEMBER`. Crear un workspace asigna automáticamente al creador como `OWNER` y
+la pareja workspace/usuario es única.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
