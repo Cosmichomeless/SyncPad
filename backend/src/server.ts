@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
@@ -8,6 +9,7 @@ import { applyNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSi
 import type { NoteId } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
+import type { AuthUser } from './auth.js';
 import { applyCors, isAllowedOrigin, rejectCors, type SecurityConfig } from './security.js';
 import { handleWorkspaceRequest } from './workspace-http.js';
 import type { WorkspaceService } from './workspaces.js';
@@ -26,11 +28,12 @@ function rejectUpgrade(socket: Duplex, status: number) {
 
 type RoomMessage =
   | { type: 'sync-request'; stateVector?: string }
-  | { type: 'update'; update: string };
+  | { type: 'update'; update: string }
+  | { type: 'awareness' };
 
 type NoteRoom = {
   document: ReturnType<typeof createNoteDocument>;
-  clients: Set<WebSocket>;
+  clients: Map<WebSocket, { connectionId: string; userId: string; email: string }>;
 };
 
 function encode(data: Uint8Array) {
@@ -95,7 +98,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     let room = rooms.get(noteId);
     if (!room) {
       room = (async () => {
-        const created = { document: createNoteDocument(), clients: new Set<WebSocket>() };
+        const created = { document: createNoteDocument(), clients: new Map<WebSocket, { connectionId: string; userId: string; email: string }>() };
         if (options.syncStore) {
           for (const update of await options.syncStore.load(noteId)) applyNoteUpdate(created.document.doc, update);
         }
@@ -120,6 +123,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
         return;
       }
+      let roomUser: AuthUser | null = null;
       if (options.auth && options.notes) {
         const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
         const noteId = url.searchParams.get('noteId');
@@ -128,12 +132,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           rejectUpgrade(socket, 401);
           return;
         }
-        const user = await options.auth.getUserBySession(decodeURIComponent(token));
-        if (!user) {
+        roomUser = await options.auth.getUserBySession(decodeURIComponent(token));
+        if (!roomUser) {
           rejectUpgrade(socket, 401);
           return;
         }
-        if (!(await options.notes.canAccess(user.id, noteId))) {
+        if (!(await options.notes.canAccess(roomUser.id, noteId))) {
           rejectUpgrade(socket, 403);
           return;
         }
@@ -150,8 +154,15 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           client.close(1008, 'noteId is required');
           return;
         }
-        room.clients.add(client);
+        const connectionId = randomUUID();
+        const participant = { connectionId, userId: roomUser?.id ?? 'anonymous', email: roomUser?.email ?? 'anonymous' };
+        room.clients.set(client, participant);
         client.send(JSON.stringify({ type: 'sync', update: encode(encodeNoteState(room.document.doc)) }));
+        const broadcastAwareness = () => {
+          const payload = JSON.stringify({ type: 'awareness', users: [...room.clients.values()] });
+          for (const peer of room.clients.keys()) if (peer.readyState === peer.OPEN) peer.send(payload);
+        };
+        broadcastAwareness();
         client.on('message', async (raw) => {
           try {
             const message = JSON.parse(raw.toString()) as RoomMessage;
@@ -167,13 +178,14 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
               applyNoteUpdate(room.document.doc, update);
               if (options.syncStore && noteId) await options.syncStore.append(noteId, update);
               const payload = JSON.stringify({ type: 'update', update: message.update });
-              for (const peer of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
+              for (const [peer] of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
             }
+            if (message.type === 'awareness') broadcastAwareness();
           } catch {
             client.close(1003, 'Invalid sync message');
           }
         });
-        client.once('close', () => room.clients.delete(client));
+        client.once('close', () => { room.clients.delete(client); broadcastAwareness(); });
         client.on('error', () => client.terminate());
       });
     })().catch(() => rejectUpgrade(socket, 403));
