@@ -176,3 +176,15 @@ Para ejecutar las comprobaciones de ambos módulos:
 La descripción de componentes, responsabilidades, tipos de estado y flujo local
 está en [docs/architecture.md](docs/architecture.md). Distingue explícitamente
 los datos persistentes de la presencia efímera y marca qué partes son futuras.
+
+## Usuarios y sesiones (#8)
+
+La migración de acceso crea usuarios con email único y sesiones revocables:
+
+```sh
+npm --prefix backend run migrate
+```
+
+Las contraseñas se almacenan con `scrypt` y los tokens de sesión solo se guardan
+como hashes. Las rutas de registro, login y logout se incorporan en #9; no hay
+acceso público seguro hasta completar también #10.
