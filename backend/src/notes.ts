@@ -7,7 +7,7 @@ export type NoteRecord = NoteSummary & {
 
 export interface NoteService {
     create(userId: UserId, workspaceId: WorkspaceId, title: string): Promise<NoteRecord | null>;
-    listForUser(userId: UserId, workspaceId: WorkspaceId): Promise<NoteRecord[]>;
+    listForUser(userId: UserId, workspaceId: WorkspaceId): Promise<NoteRecord[] | null>;
     rename(userId: UserId, noteId: NoteId, title: string): Promise<NoteRecord | null>;
     delete(userId: UserId, noteId: NoteId): Promise<boolean>;
 }
@@ -59,6 +59,11 @@ export function createNoteService(database: SqlExecutor): NoteService {
         },
 
         async listForUser(userId: UserId, workspaceId: WorkspaceId) {
+            const membership = await database.query(
+                'SELECT 1 FROM syncpad.memberships WHERE user_id = $1 AND workspace_id = $2',
+                [userId, workspaceId],
+            );
+            if (!membership.rows[0]) return null;
             const result = await database.query<{
                 id: string;
                 workspace_id: string;
@@ -113,4 +118,8 @@ export function createNoteService(database: SqlExecutor): NoteService {
             return Boolean(result.rows[0]);
         },
     };
+}
+
+export function isNoteId(value: unknown): value is NoteId {
+    return typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value);
 }

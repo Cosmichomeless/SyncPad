@@ -31,11 +31,11 @@ test('empty note titles are rejected before querying', async () => {
 });
 
 test('listing orders by workspace update time and mutations check membership', async () => {
-    const db = database([]);
+    const db = database([{ id: 'note-1', workspace_id: 'workspace-1', title: 'Plan', created_by: 'user-1', updated_at: '2026-10-02T00:00:00.000Z' }]);
     const service = createNoteService(db);
     await service.listForUser('user-1' as never, 'workspace-1' as never);
     await service.rename('user-1' as never, 'note-1' as never, 'Renamed');
     await service.delete('user-1' as never, 'note-1' as never);
-    assert.match(db.calls[0].query, /ORDER BY notes\.updated_at DESC/);
+    assert.match(db.calls[1].query, /ORDER BY notes\.updated_at DESC/);
     assert.equal(db.calls.slice(1).every(({ query }) => query.includes('memberships')), true);
 });

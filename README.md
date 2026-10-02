@@ -223,6 +223,10 @@ con título, creador y `updated_at`. Las consultas siempre comprueban membership
 ordenan el listado por modificación reciente; el contenido colaborativo aún no se
 guarda aquí.
 
+La API CRUD de notas está documentada en [docs/issues/015-note-crud.md](docs/issues/015-note-crud.md):
+los miembros pueden crear/listar y renombrar/borrar notas, mientras que las
+operaciones sobre workspaces ajenos se rechazan.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
