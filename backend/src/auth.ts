@@ -27,6 +27,14 @@ export type AuthUser = {
   email: string;
 };
 
+export interface AuthService {
+  register(email: string, password: string): Promise<AuthUser>;
+  authenticate(email: string, password: string): Promise<AuthUser | null>;
+  createSession(userId: UserId): Promise<string>;
+  getUserBySession(token: string): Promise<AuthUser | null>;
+  invalidateSession(token: string): Promise<void>;
+}
+
 export interface SqlExecutor {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>;
 }
@@ -77,7 +85,7 @@ function toUser(row: { id: string; email: string }): AuthUser {
   return { id: row.id as UserId, email: row.email };
 }
 
-export function createAuthService(database: SqlExecutor) {
+export function createAuthService(database: SqlExecutor): AuthService {
   return {
     async register(email: string, password: string): Promise<AuthUser> {
       const normalizedEmail = normalizeEmail(email);

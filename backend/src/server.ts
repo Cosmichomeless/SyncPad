@@ -2,10 +2,18 @@ import { createServer } from 'node:http';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type { HealthResponse } from '@syncpad/shared';
+import { handleAuthRequest } from './auth-http.js';
+import type { AuthService } from './auth.js';
 
-export function createSyncServer() {
+export function createSyncServer(options: { auth?: AuthService } = {}) {
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
+    if (options.auth && req.url?.startsWith('/auth/')) {
+      void handleAuthRequest(req, res, options.auth).catch(() => {
+        if (!res.headersSent) res.writeHead(500).end();
+      });
+      return;
+    }
     if (req.method === 'GET' && req.url === '/health') {
       const response: HealthResponse = { status: 'ok' };
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
