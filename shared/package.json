@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "types": "src/index.ts",
-  "dependencies": {
-    "yjs": "13.6.27"
-  },
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -15,6 +12,6 @@
     }
   },
   "dependencies": {
-    "yjs": "^13.6.27"
+    "yjs": "13.6.27"
   }
 }

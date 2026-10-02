@@ -47,6 +47,9 @@ button:disabled { cursor: wait; opacity: 0.6; }
 .empty { border: 1px dashed #b8c8d0; color: #62727a; padding: 1rem; }
 .editor-preview { border-top: 1px solid #d7e0e5; margin-top: 1.5rem; padding-top: 1.5rem; }
 .editor-preview h3 { font-size: 1.7rem; margin: 0.3rem 0 0.6rem; }
+.editor-heading { align-items: center; display: flex; justify-content: space-between; }
+.sync-dot { background: #d79a35; border-radius: 50%; height: 0.65rem; width: 0.65rem; }
+.editor-preview textarea { border: 1px solid #b8c8d0; border-radius: 0.3rem; display: block; font: inherit; line-height: 1.6; min-height: 16rem; padding: 1rem; resize: vertical; width: 100%; }
 .error { color: #a33131; font-weight: 600; }
 
 @media (max-width: 680px) {
