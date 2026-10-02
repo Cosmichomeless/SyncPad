@@ -16,6 +16,7 @@
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@syncpad/shared": "file:../shared",
     "pg": "^8.16.3",
     "ws": "8.22.0"
   },

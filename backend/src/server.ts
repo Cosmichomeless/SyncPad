@@ -1,13 +1,15 @@
 import { createServer } from 'node:http';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
+import type { HealthResponse } from '@syncpad/shared';
 
 export function createSyncServer() {
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
+      const response: HealthResponse = { status: 'ok' };
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      res.end(JSON.stringify({ status: 'ok' }));
+      res.end(JSON.stringify(response));
       return;
     }
     res.writeHead(404).end();

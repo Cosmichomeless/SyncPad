@@ -1,8 +1,12 @@
+import type { WorkspaceSummary } from '@syncpad/shared';
+
 export default function Home() {
+  const workspaceName = (workspace: WorkspaceSummary | undefined) => workspace?.name ?? 'SyncPad';
+
   return (
     <main>
       <p className="eyebrow">Workspace colaborativo · Proyecto experimental</p>
-      <h1>SyncPad</h1>
+      <h1>{workspaceName(undefined)}</h1>
       <p>
         Nuestro objetivo es crear un espacio de notas y documentos colaborativos
         que funcione en tiempo real y también offline.
