@@ -249,6 +249,10 @@ sala y se deduplican por hash, como describe [docs/issues/021-yjs-persistence.md
 La presencia de participantes es efímera y se difunde solo dentro de la sala,
 según [docs/issues/023-awareness.md](docs/issues/023-awareness.md).
 
+La prueba de convergencia y reinicio está documentada en
+[docs/issues/024-convergence-restart.md](docs/issues/024-convergence-restart.md):
+el contenido se restaura, pero la presencia antigua no.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
