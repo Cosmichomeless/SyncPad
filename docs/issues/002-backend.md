@@ -43,3 +43,7 @@ Revisión directa de alcance, cierre de conexiones, configuración, lockfile y p
 con el modelo actual, siguiendo la preferencia del usuario de evitar más subagentes.
 Base main tras PR #70. Se publica una PR exclusiva para #2, se integra tras verificar
 y se enlaza su resultado en la issue. Sin CI remoto todavía (#61 y #62).
+
+La configuración de PostgreSQL se incorpora en la issue #3; este servidor no abre
+una conexión a la base de datos durante el arranque hasta que exista una migración
+que la necesite.

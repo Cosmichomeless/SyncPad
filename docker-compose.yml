@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: syncpad
+      POSTGRES_USER: syncpad
+      POSTGRES_PASSWORD: syncpad
+    ports:
+      - "5432:5432"
+    volumes:
+      - syncpad-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U syncpad -d syncpad"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  syncpad-postgres:
