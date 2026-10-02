@@ -216,6 +216,13 @@ Los OWNER pueden invitar y eliminar miembros mediante las rutas documentadas en
 Las invitaciones expiran, solo se aceptan una vez y no permiten eliminar al
 último OWNER.
 
+## Metadata de notas (#14)
+
+La migración `005-notes.sql` crea notas ligadas obligatoriamente a un workspace,
+con título, creador y `updated_at`. Las consultas siempre comprueban membership y
+ordenan el listado por modificación reciente; el contenido colaborativo aún no se
+guarda aquí.
+
 ## Cookies, CSRF y CORS (#10)
 
 El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
