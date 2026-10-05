@@ -93,8 +93,10 @@ export default function Home() {
   useEffect(() => {
     if (!user?.id || !selectedNote) return;
     const document = createEditorDocument();
-    const persistence = persistNote(user.id, selectedNote.id, document.doc);
     let cancelled = false;
+    const persistence = persistNote(user.id, selectedNote.id, document.doc, () => {
+      if (!cancelled) setError('No se pudo guardar en el almacenamiento local');
+    });
     let socket: WebSocket | null = null;
     documentRef.current = document;
     const observeContent = () => {

@@ -1,69 +1,84 @@
 # #25 — Persistencia local de notas Yjs
 
-## Entrega y alcance
+## Entrega y decisión basada en evidencia
 
-Se añade `y-indexeddb` 9.0.12 para conservar las actualizaciones de cada nota
-visitada. La clave es `syncpad:note:` seguida de la pareja JSON `[userId, noteId]`,
-sin colisiones por delimitadores. Se requiere el ID del usuario autenticado.
+La entrega inicial (3c545de) usaba y-indexeddb 9.0.12. Su whenSynced solo se
+resuelve con el evento synced; la cadena interna _db.then/fetchUpdates no
+maneja rechazos. Por tanto, un catch en el editor no podía gestionar errores
+de apertura/lectura: dejaba una promesa pendiente y un rechazo no manejado.
+Las nuevas pruebas reprodujeron ambos rechazos con fake-indexeddb antes de
+cambiar el adaptador (7 pass, 3 fail, 2 cancelled; código 1). Una prueba de
+inyección de indisponibilidad tenía inicialmente un mock getter inválido;
+se corrigió a una apertura que lanza SecurityError. La cancelación también
+mostró una promesa de hidratación pendiente.
 
-El editor espera `whenSynced` antes de abrir el WebSocket, observa el contenido
-Yjs y muestra el texto restaurado antes de sincronizar. Cambiar de nota limpia
-el texto visible. El cleanup cancela callbacks antiguos, retira el observer,
-cierra el socket y destruye la persistencia antes del documento; también
-destruye el documento si el cierre del almacenamiento rechaza. Las referencias
-solo se limpian si pertenecen a esa instancia. No se añade reconexión ni edición
-desconectada. Seleccionar de nuevo la nota activa no borra su texto.
+Se sustituye el adaptador fino por IndexedDB nativo, sin campos privados de
+la dependencia. y-indexeddb se elimina; fake-indexeddb se conserva para tests.
+La clave sigue siendo syncpad:note: seguida de JSON [userId, noteId]. Se
+conservan la versión uno, updates con autoIncrement y custom; el adaptador
+lee las actualizaciones existentes sin migración ni eliminación de datos.
+
+## Comportamiento real
+
+- whenSynced: Promise<void> rechaza por errores síncronos de apertura,
+  request.onerror, lectura o aborto de la transacción de lectura. Los datos
+  solo se aplican después de completar la transacción. El catch del editor
+  muestra «No se pudo abrir el almacenamiento local» y no inicia el socket.
+- El listener Yjs de updates se registra después de hidratar. Se guarda el
+  estado inicial hidratado y se encolan las actualizaciones posteriores.
+- Las escrituras se esperan hasta transaction.oncomplete, no solo el éxito
+  del request. Errores y abortos se consumen y notifican mediante onError;
+  la UI activa muestra «No se pudo guardar en el almacenamiento local».
+  No se promete conservar una actualización cuya escritura falló.
+- destroy(): Promise<void> es idempotente, retira el listener inmediatamente,
+  espera hidratación y escrituras pendientes, y cierra la base antes de que
+  la página destruya el documento. Los errores de hidratación ya observados
+  no hacen fallar el cleanup. Un catch interno impide rechazos no manejados
+  cuando se cancela sin esperar whenSynced; el consumidor aún recibe su rechazo.
+- Una apertura cancelada cierra la base antes de leer/aplicar datos. Si la
+  cancelación ocurre durante la lectura, se espera su transacción y no se
+  aplica contenido ni se registra el listener. whenSynced se resuelve sin
+  aplicar datos en una cancelación exitosa; la página comprueba cancelled.
+- Los callbacks de UI quedan protegidos por cancelled. El WebSocket,
+  metadata, shell offline y reconexión no se reescriben.
 
 ## Verificación ejecutada
 
-Entorno: Node.js 22.16.0 y npm 10.9.2. Instalación desde `frontend/`:
+Node.js 22.16.0 / npm 10.9.2. Eliminación de dependencia:
 
-```sh
-npm install y-indexeddb --cache /tmp/syncpad-npm-cache --no-audit --no-fund
-npm install -D fake-indexeddb --cache /tmp/syncpad-npm-cache --no-audit --no-fund
-```
+`npm --prefix frontend uninstall y-indexeddb --cache /tmp/syncpad-npm-cache --no-audit --no-fund`
 
-Ambas instalaciones finalizaron con código 0 y añadieron un paquete cada una.
-Antes de implementar el módulo, `npm --prefix frontend test` produjo el RED
-esperado: `Cannot find module '../src/lib/note-persistence'` (1 pass, 1 fail).
-Después, con Yjs y persistencia reales sobre fake-indexeddb:
+Resultado: removed 1 package, código 0.
 
 | Comando desde la raíz | Resultado |
 | --- | --- |
-| `npm --prefix frontend test` | 7/7 pass, 0 fail, código 0 |
-| `npm --prefix frontend run lint` | Sin errores, código 0 |
-| `npm --prefix frontend run typecheck` | Sin errores, código 0 |
-| `npm --prefix frontend run build` | Compilación correcta; `/` y `/_not-found` estáticas, código 0 |
-| `npm --prefix frontend run typecheck` tras build | Sin errores, código 0 |
-| `git diff --check` | Sin errores |
+| npm --prefix frontend test | 16 tests, 16 pass, 0 fail, 0 cancelled, código 0 |
+| npm --prefix frontend run lint | Sin errores, código 0 |
+| npm --prefix frontend run typecheck | Sin errores, código 0 |
+| npm --prefix frontend run build | Compiled successfully; / y /_not-found estáticas, código 0 |
+| npm --prefix frontend run typecheck tras build | Sin errores, código 0 |
 
-Las pruebas cubren restauración sin red, dos usuarios con el mismo ID de nota,
-dos notas del mismo usuario, claves inequívocas, hidratación repetida sin
-duplicación y cancelación antes de hidratar. La prueba de portada sigue pasando.
-Un primer lint rechazó el reset síncrono en el effect; se movió al callback de
-selección, sin desactivar reglas. Una primera cadena de comprobaciones se
-interrumpió por el timeout de 1 s; se repitió con 10 s y finalizó correctamente.
+Las pruebas usan Yjs y fake-indexeddb reales salvo inyección dirigida de fallos.
+Cubren restauración, aislamiento por usuario y nota, claves, hidratación
+repetida, cierre durante apertura/lectura, errores síncronos y asíncronos de
+apertura, lectura denegada, escritura abortada antes/después del éxito del
+request, cola de 30 ediciones exactas (incluido Unicode), cierre idempotente
+y compatibilidad del esquema anterior. node:test detecta rechazos no manejados
+(como los de la reproducción RED); la suite final no reporta ninguno.
 
 ## Límites y revisión pendiente
 
-No se verificó el flujo UI autenticado ni una recarga offline completa: los
-servicios locales de los puertos 3000 y 3001 no estaban en ejecución (curl devolvió
-000). Las pruebas verifican el documento local, no la recuperación de toda la
-aplicación. El shell offline depende de #26 y la navegación/metadata de #30;
-`/auth/me` y el listado todavía requieren red. #25 debe permanecer abierta hasta
-verificar aceptación e integración. Las revisiones independientes de
-especificación y calidad quedan como puerta previa a publicación.
+Esta corrección no ejercitó la UI autenticada ni la recarga offline completa;
+el agente principal realiza esa verificación por separado. Las pruebas
+verifican el documento local, no la recuperación de toda la aplicación.
+El shell offline depende de #26 y la navegación/metadata de #30; /auth/me y
+los listados aún requieren red. No se añade edición desconectada ni reconexión.
+#25 permanece abierta y las revisiones independientes siguen siendo puerta
+previa a publicación.
 
-Limitación de la dependencia: en `y-indexeddb/src/y-indexeddb.js`, `whenSynced`
-solo se resuelve al emitir `synced`, y los errores de apertura/lectura no se
-propagan a esa promesa. El `.catch` del editor no garantiza un mensaje ante
-IndexedDB denegado y la dependencia puede generar un rechazo no manejado. El
-cleanup local maneja un rechazo de `destroy()` sin conservar el documento,
-pero el tratamiento completo del fallo de apertura necesita resolver esta
-limitación antes de afirmar robustez ante almacenamiento denegado. Se mantiene
-el límite de persistencia exacto del plan, sin usar campos privados de la librería.
-
-Los datos locales no se borran al salir de la sesión ni están cifrados; separar
-claves por usuario no protege frente a acceso al perfil del navegador. Las
-modificaciones previas de tests backend, next-env.d.ts y globals.css quedan
-fuera de esta entrega. No se publican cambios ni se cierra la issue.
+El registro de updates es append-only, sin compactación automática: el uso
+prolongado puede aumentar almacenamiento/tiempo de lectura. Los datos no se
+borran al cerrar sesión ni están cifrados; separar claves por usuario no
+protege frente a acceso al perfil del navegador. Las modificaciones previas
+de tests backend, next-env.d.ts y globals.css quedan fuera de esta entrega.
+No se publican cambios ni se cierra la issue.

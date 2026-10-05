@@ -19,7 +19,6 @@
     "next": "16.3.8",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "y-indexeddb": "^9.0.12",
     "yjs": "^13.6.27"
   },
   "devDependencies": {
