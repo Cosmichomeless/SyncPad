@@ -289,3 +289,18 @@ rechazos no manejados y su promesa de hidratación pendiente ante errores.
 El registro de updates no se compacta automáticamente. #25 sigue
 abierta hasta verificar aceptación e integración. Evidencia y límites en
 [docs/issues/025-indexeddb.md](docs/issues/025-indexeddb.md).
+
+## Shell anónimo offline (#26, infraestructura)
+
+`npm --prefix frontend run build` genera `public/sw.js` y
+`public/offline-shell.html` desde la portada estática de Next. El registro se
+activa solo en producción, en un contexto seguro (HTTPS o localhost), y requiere
+una primera visita online para instalar el caché. Al perder la red, una
+navegación a `/` sin query puede cargar el formulario anónimo y los assets del
+build. No se guardan respuestas vivas de la portada, API, auth ni datos privados.
+
+Se verificaron tests del worker ejecutado en VM, lint, typecheck, build/postbuild
+y typecheck posterior. La prueba real de control del worker y recarga offline
+está pendiente; abrir notas visitadas tras recargar y verificar logout depende
+de #30. #26 sigue abierta: no se afirma aceptación offline completa. Evidencia,
+política del caché y límites en [docs/issues/026-app-shell.md](docs/issues/026-app-shell.md).
