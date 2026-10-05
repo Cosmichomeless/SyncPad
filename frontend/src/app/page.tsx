@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyEditorUpdate, createEditorDocument, encodeEditorState, type EditorDocument } from '../lib/note-document';
 import { persistNote } from '../lib/note-persistence';
-import { HttpError, NetworkError, request } from '../lib/api-request';
+import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
 import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
 
@@ -101,7 +101,7 @@ export default function Home() {
       }
       return rows;
     } catch (cause) {
-      if (navigationRef.current === selection && isCurrentIdentity(identity))
+      if (isCurrentIdentity(identity) && shouldHandleRequestFailure(cause, navigationRef.current === selection))
         await handleFailure(cause, identity, workspace.id).catch(cause => cacheFailure(cause, identity));
     }
   }, [setSelectedNote, handleFailure, cacheFailure]);
@@ -219,7 +219,10 @@ export default function Home() {
       const note = rows?.find(row => row.id === result.note.id);
       if (note) setSelectedNote(note);
     }
-    catch (cause) { if (navigationRef.current === selection) await handleFailure(cause, identity, workspace.id).catch(cause => cacheFailure(cause, identity)); }
+    catch (cause) {
+      if (isCurrentIdentity(identity) && shouldHandleRequestFailure(cause, navigationRef.current === selection))
+        await handleFailure(cause, identity, workspace.id).catch(cause => cacheFailure(cause, identity));
+    }
     finally { setBusy(false); }
   }
 

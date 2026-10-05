@@ -6,6 +6,9 @@ export class HttpError extends Error {
 export class NetworkError extends Error {
   constructor(cause: unknown) { super('No se pudo conectar con el servidor', { cause }); this.name = 'NetworkError'; }
 }
+export function shouldHandleRequestFailure(cause: unknown, currentSelection: boolean): boolean {
+  return currentSelection || (cause instanceof HttpError && [401, 403, 404].includes(cause.status));
+}
 async function transport(path: string, init: RequestInit): Promise<Response> {
   try { return await fetch(API_URL + path, { ...init, credentials: 'include', cache: 'no-store' }); }
   catch (cause) { throw new NetworkError(cause); }

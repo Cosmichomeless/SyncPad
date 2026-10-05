@@ -61,6 +61,17 @@ fallida y aborts reales de IndexedDB incluso después de request success.
 
 ## Aceptación pendiente del controlador
 
+La revisión de especificación detectó un guarda de navegación que descartaba
+denegaciones tardías de la identidad vigente. Se corrigió la política común
+de fallos y se usa tanto en carga de notas como en creación: 401/403/404 se
+procesan aunque cambie la selección; fallos ordinarios antiguos no afectan
+la navegación actual y una identidad anterior sigue descartándose.
+
+Regresión focalizada: RED 8 pass/5 fail por la política aún ausente; GREEN
+13/13 al implementarla. Suite completa posterior: 57/57; lint, typecheck,
+build/postbuild, typecheck posterior y diff check con exit 0. La aceptación
+en navegador y nueva revisión de la corrección siguen pendientes.
+
 No se ejercitó esta UI en navegador durante esta implementación. No se usó
 ni controló la sesión `syncpad-verification` ni los servidores de prueba del
 controlador. Las pruebas automáticas no sustituyen los siguientes escenarios

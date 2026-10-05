@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { HttpError, NetworkError, request } from '../src/lib/api-request';
+import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../src/lib/api-request';
 const original = globalThis.fetch;
 afterEach(() => { globalThis.fetch = original; });
 test('only fetch transport rejection is a NetworkError', async () => {
@@ -34,4 +34,17 @@ test('successful mutation uses credentials and CSRF, and never caches HTTP respo
   assert.equal(await request('/auth/logout', { method: 'POST' }), undefined);
   assert.equal(new Headers(requests[1].headers).get('x-csrf-token'), 'csrf');
   assert.ok(requests.every(init => init.credentials === 'include' && init.cache === 'no-store'));
+});
+
+for (const status of [401, 403, 404]) test(`late HTTP ${status} is handled after navigation changes`, () => {
+  assert.equal(shouldHandleRequestFailure(new HttpError(status), false), true);
+});
+test('stale ordinary failures do not affect the current navigation', () => {
+  assert.equal(shouldHandleRequestFailure(new HttpError(500), false), false);
+  assert.equal(shouldHandleRequestFailure(new NetworkError(new Error('offline')), false), false);
+  assert.equal(shouldHandleRequestFailure(new Error('parse failure'), false), false);
+});
+test('current navigation handles its failures', () => {
+  assert.equal(shouldHandleRequestFailure(new HttpError(500), true), true);
+  assert.equal(shouldHandleRequestFailure(new NetworkError(new Error('offline')), true), true);
 });
