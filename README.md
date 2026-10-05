@@ -268,3 +268,24 @@ sincronización Yjs de #18–#22.
 
 La edición básica de una nota ya usa el documento Yjs y la sala WebSocket, con
 estado de conexión visible; el alcance está en [docs/issues/022-yjs-editor.md](docs/issues/022-yjs-editor.md).
+
+## Persistencia local de notas (#25)
+
+Las notas visitadas conservan su contenido Yjs en IndexedDB mediante
+un adaptador nativo, con claves separadas por usuario autenticado y nota y
+el esquema previo de updates intacto. El editor hidrata el documento antes
+de iniciar el WebSocket. Los errores de apertura/lectura rechazan `whenSynced`
+y muestran un error de almacenamiento en español; las escrituras fallidas
+también se notifican. El cierre espera las transacciones pendientes y cancela
+la hidratación obsoleta sin aplicar datos. Se verificaron 16/16 tests
+con persistencia real sobre fake-indexeddb, lint, typecheck, build y typecheck
+posterior sin errores (Node.js 22.16.0/npm 10.9.2).
+
+Esto no entrega una recarga offline completa: el shell depende de #26 y la
+navegación/metadata de #30; el acceso y los listados aún requieren red. No se
+añaden reconexión ni edición desconectada, y la UI autenticada no se ejercitó
+en esta verificación. Se sustituyó `y-indexeddb` 9.0.12 tras reproducir sus
+rechazos no manejados y su promesa de hidratación pendiente ante errores.
+El registro de updates no se compacta automáticamente. #25 sigue
+abierta hasta verificar aceptación e integración. Evidencia y límites en
+[docs/issues/025-indexeddb.md](docs/issues/025-indexeddb.md).
