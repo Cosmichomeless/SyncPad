@@ -40,10 +40,13 @@ function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, action: (store: 
 export function persistNote(userId: string, noteId: string, doc: Y.Doc, onError: (error: unknown) => void = () => {}): NotePersistence {
   let cancelled = false;
   let db: IDBDatabase | null = null;
-  let pending = Promise.resolve();
+  const pending = new Set<Promise<void>>();
   let closing: Promise<void> | undefined;
   const storeUpdate = (update: Uint8Array) => {
-    pending = pending.then(() => transact(db!, 'readwrite', (store) => store.add(update))).then(() => {}, onError);
+    // Submit now so a replacement connection cannot read ahead of these writes.
+    const write = transact(db!, 'readwrite', (store) => store.add(update)).then(() => {}, onError);
+    pending.add(write);
+    void write.then(() => pending.delete(write));
   };
   const whenSynced = (async () => {
     db = await openDatabase(noteStorageKey(userId, noteId));
@@ -75,7 +78,7 @@ export function persistNote(userId: string, noteId: string, doc: Y.Doc, onError:
       doc.off('update', storeUpdate);
       closing ??= (async () => {
         await whenSynced.catch(() => {});
-        await pending;
+        await Promise.all(pending);
         db?.close();
         db = null;
       })();

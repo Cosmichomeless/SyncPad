@@ -18,6 +18,19 @@ La clave sigue siendo syncpad:note: seguida de JSON [userId, noteId]. Se
 conservan la versión uno, updates con autoIncrement y custom; el adaptador
 lee las actualizaciones existentes sin migración ni eliminación de datos.
 
+La revisión de calidad reprodujo otra carrera: tras 30 ediciones, llamar a
+destroy() sin esperarlo y abrir inmediatamente la misma clave hidrataba un
+documento vacío. La cadena pending.then creaba transacciones demasiado tarde;
+la lectura nueva adelantaba las escrituras aún no enviadas. Antes del cambio,
+`npm --prefix frontend test` devolvió 17 pass, 2 fail, 0 cancelled (código 1):
+la reapertura inmediata esperaba `Exact final content 29 🙂` y recibió vacío;
+la reapertura repetida esperaba `Latest 0 🙂` y recibió vacío.
+
+storeUpdate ahora crea cada transacción readwrite sincrónicamente. IndexedDB
+ordena las transacciones conflictivas, incluidas las de otra conexión a la
+misma base. Un conjunto de promesas con errores tratados registra las
+escrituras pendientes para destroy(); no hay coordinación global de claves.
+
 ## Comportamiento real
 
 - whenSynced: Promise<void> rechaza por errores síncronos de apertura,
@@ -25,7 +38,8 @@ lee las actualizaciones existentes sin migración ni eliminación de datos.
   solo se aplican después de completar la transacción. El catch del editor
   muestra «No se pudo abrir el almacenamiento local» y no inicia el socket.
 - El listener Yjs de updates se registra después de hidratar. Se guarda el
-  estado inicial hidratado y se encolan las actualizaciones posteriores.
+  estado inicial hidratado y se envían inmediatamente las transacciones de
+  actualizaciones posteriores, sin diferir su creación detrás de una promesa.
 - Las escrituras se esperan hasta transaction.oncomplete, no solo el éxito
   del request. Errores y abortos se consumen y notifican mediante onError;
   la UI activa muestra «No se pudo guardar en el almacenamiento local».
@@ -52,7 +66,7 @@ Resultado: removed 1 package, código 0.
 
 | Comando desde la raíz | Resultado |
 | --- | --- |
-| npm --prefix frontend test | 16 tests, 16 pass, 0 fail, 0 cancelled, código 0 |
+| npm --prefix frontend test | 19 tests, 19 pass, 0 fail, 0 cancelled, código 0 |
 | npm --prefix frontend run lint | Sin errores, código 0 |
 | npm --prefix frontend run typecheck | Sin errores, código 0 |
 | npm --prefix frontend run build | Compiled successfully; / y /_not-found estáticas, código 0 |
@@ -62,15 +76,38 @@ Las pruebas usan Yjs y fake-indexeddb reales salvo inyección dirigida de fallos
 Cubren restauración, aislamiento por usuario y nota, claves, hidratación
 repetida, cierre durante apertura/lectura, errores síncronos y asíncronos de
 apertura, lectura denegada, escritura abortada antes/después del éxito del
-request, cola de 30 ediciones exactas (incluido Unicode), cierre idempotente
-y compatibilidad del esquema anterior. node:test detecta rechazos no manejados
+request, cola de 30 ediciones exactas (incluido Unicode), reapertura inmediata
+antes de esperar el cierre, cinco reaperturas rápidas sucesivas, rechazo de
+updates Yjs malformados, cierre idempotente y compatibilidad del esquema
+anterior. node:test detecta rechazos no manejados
 (como los de la reproducción RED); la suite final no reporta ninguno.
+
+## Verificación autenticada en navegador (agente principal)
+
+Chromium local mediante Playwright CLI, frontend compilado con Next start y
+backend con `node --import tsx src/index.ts`. Base dedicada
+`syncpad_offline_verify_20261005`, con las siete migraciones aplicadas.
+
+- Registro de cuenta de prueba, creación de workspace y nota desde la UI.
+- Edición online: `Contenido persistido A — verificación real`.
+- Recarga online, bloqueo de red antes de seleccionar la nota ya listada:
+  el editor restaura exactamente ese texto y muestra `desconectado`.
+- Red restaurada y almacenamiento denegado mediante una apertura IndexedDB
+  que lanza SecurityError: seleccionar la nota muestra el alert español
+  `No se pudo abrir el almacenamiento local`; no queda una carga pendiente.
+- Revisión independiente de especificación de `25250df..27d22ac`: PASS
+  para los criterios de la entrega documental anterior, con 16/16 pruebas.
+  No constituye revisión del cambio posterior de reapertura inmediata.
+
+Esta prueba no constituye una recarga completa con la red bloqueada.
+El navegador no se volvió a ejercitar para este cambio del adaptador; la
+regresión de lifecycle se verificó con Yjs/fake-indexeddb reales.
 
 ## Límites y revisión pendiente
 
-Esta corrección no ejercitó la UI autenticada ni la recarga offline completa;
-el agente principal realiza esa verificación por separado. Las pruebas
-verifican el documento local, no la recuperación de toda la aplicación.
+La UI autenticada se ejercitó como se detalla arriba; la recarga offline
+completa todavía no. Las pruebas verifican el documento local, no la
+recuperación de toda la aplicación.
 El shell offline depende de #26 y la navegación/metadata de #30; /auth/me y
 los listados aún requieren red. No se añade edición desconectada ni reconexión.
 #25 permanece abierta y las revisiones independientes siguen siendo puerta

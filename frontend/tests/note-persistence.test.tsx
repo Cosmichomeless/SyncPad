@@ -200,6 +200,78 @@ test('drains a queue of exact edits before destroy closes storage', async () => 
   document.doc.destroy();
 });
 
+test('immediate same-key reopen restores all edits before awaiting destruction', async () => {
+  const first = createEditorDocument();
+  const saved = persistNote('immediate-user', 'immediate-note', first.doc);
+  await saved.whenSynced;
+  for (let index = 0; index < 30; index++) {
+    first.content.delete(0, first.content.length);
+    first.content.insert(0, `Exact final content ${index} 🙂`);
+  }
+  const closing = saved.destroy();
+  const second = createEditorDocument();
+  const reopened = persistNote('immediate-user', 'immediate-note', second.doc);
+  try {
+    await reopened.whenSynced;
+    assert.equal(second.content.toString(), 'Exact final content 29 🙂');
+    await closing;
+    assert.equal(second.content.toString(), 'Exact final content 29 🙂');
+  } finally {
+    await closing;
+    await reopened.destroy();
+    first.doc.destroy();
+    second.doc.destroy();
+  }
+});
+
+test('rapid repeated same-key reopen preserves each latest edit without awaiting old drains', async () => {
+  let document = createEditorDocument();
+  let persistence = persistNote('rapid-user', 'rapid-note', document.doc);
+  const drains: Promise<void>[] = [];
+  try {
+    await persistence.whenSynced;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      document.content.delete(0, document.content.length);
+      document.content.insert(0, `Latest ${attempt} 🙂`);
+      const previous = document;
+      drains.push(persistence.destroy().then(() => previous.doc.destroy()));
+      document = createEditorDocument();
+      persistence = persistNote('rapid-user', 'rapid-note', document.doc);
+      await persistence.whenSynced;
+      assert.equal(document.content.toString(), `Latest ${attempt} 🙂`);
+    }
+  } finally {
+    await Promise.all(drains);
+    await persistence.destroy();
+    document.doc.destroy();
+  }
+});
+
+test('rejects malformed persisted Yjs updates and closes storage', async (t) => {
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(noteStorageKey('failure-user', 'malformed-note'));
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore('updates', { autoIncrement: true });
+      request.result.createObjectStore('custom');
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('updates', 'readwrite');
+      transaction.objectStore('updates').add(new Uint8Array([0]));
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onabort = () => { db.close(); reject(transaction.error); };
+    };
+  });
+  const document = createEditorDocument();
+  const close = t.mock.method(IDBDatabase.prototype, 'close');
+  const persistence = persistNote('failure-user', 'malformed-note', document.doc);
+  await assert.rejects(persistence.whenSynced);
+  await persistence.destroy();
+  assert.equal(close.mock.callCount(), 1);
+  document.doc.destroy();
+});
+
 test('reads the existing y-indexeddb version-one updates schema', async () => {
   const document = createEditorDocument();
   document.content.insert(0, 'Legacy content');
