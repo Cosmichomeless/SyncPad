@@ -84,3 +84,14 @@ en este cambio. #26 permanece abierta hasta verificar esa aceptación completa.
 Revisiones independientes de especificación y calidad: aprobadas. La única
 observación menor era una fixture dinámica ausente; se añadió un manifest
 con `dynamicRoutes['/']` y se comprobó su rechazo sin cambiar implementación.
+
+## Integración de navegación #30 — aceptación pendiente
+
+#30 añade identidad local bloqueable y metadata IndexedDB por usuario sobre
+el shell anónimo existente, sin cambiar la política de CacheStorage ni
+guardar respuestas privadas. Frontend 52/52 y backend 54/54 tests pasan; lint,
+typecheck/build y postbuild/typecheck posterior del frontend también pasan.
+La UI nueva no se ejercitó en navegador por el implementador; el controlador
+aún debe comprobar recarga offline con notas, aislamiento A/B, logout en dos
+pestañas y refresco de metadata sin sustituir Yjs. #26 sigue abierta.
+Evidencia: [#30](030-offline-navigation.md).

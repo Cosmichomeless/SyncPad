@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import { beforeEach, test } from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineIdentity, readOfflineGeneration, subscribeOfflineIdentity } from '../src/lib/offline-session';
+const storage = new Map<string, string>();
+const events = new EventTarget();
+Object.defineProperty(globalThis, 'window', { configurable: true, value: { localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) }, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events) } });
+beforeEach(() => storage.clear());
+test('generation snapshot distinguishes fresh profile and durable lock for late auth results', () => {
+  const fresh = readOfflineGeneration();
+  assert.equal(fresh, null);
+  invalidateOfflineIdentity();
+  assert.notEqual(readOfflineGeneration(), fresh);
+  const locked = readOfflineGeneration();
+  establishOfflineIdentity({ id: 'b', email: 'b@example.test' });
+  assert.notEqual(readOfflineGeneration(), locked);
+});
+test('identity changes publish and invalidate old generations', () => {
+  const values: unknown[] = [];
+  const unsubscribe = subscribeOfflineIdentity(value => values.push(value));
+  const a = establishOfflineIdentity({ id: 'a', email: 'a@example.test' });
+  assert.deepEqual(readOfflineIdentity(), a);
+  const b = establishOfflineIdentity({ id: 'b', email: 'b@example.test' });
+  assert.equal(isCurrentIdentity(a), false);
+  assert.equal(isCurrentIdentity(b), true);
+  invalidateOfflineIdentity();
+  assert.equal(readOfflineIdentity(), null);
+  assert.equal(isOfflineIdentityLocked(), true);
+  assert.equal(values.length, 3);
+  unsubscribe();
+});
+test('durable logout record survives module reload and storage events publish', async () => {
+  establishOfflineIdentity({ id: 'a', email: 'a@example.test' });
+  invalidateOfflineIdentity();
+  const reloaded = await import('../src/lib/offline-session');
+  assert.equal(reloaded.isOfflineIdentityLocked(), true);
+  const persisted = JSON.stringify(Object.fromEntries(storage));
+  const freshProcess = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    globalThis.window = { localStorage: { getItem: key => (${persisted})[key] ?? null } };
+    const { isOfflineIdentityLocked, readOfflineIdentity } = (await import('./src/lib/offline-session.ts')).default;
+    assert.equal(isOfflineIdentityLocked(), true);
+    assert.equal(readOfflineIdentity(), null);
+  `], { encoding: 'utf8' });
+  assert.equal(freshProcess.status, 0, freshProcess.stderr);
+  let published = false;
+  const stop = subscribeOfflineIdentity(value => { published = value === null; });
+  const event = new Event('storage');
+  Object.assign(event, { key: 'syncpad.offline-identity.v1' });
+  events.dispatchEvent(event);
+  assert.equal(published, true);
+  stop();
+  establishOfflineIdentity({ id: 'b', email: 'b@example.test' });
+  assert.equal(isOfflineIdentityLocked(), false);
+});
+test('storage exceptions fail closed', () => {
+  const win = window;
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { get localStorage() { throw new Error('blocked'); } } });
+  assert.equal(readOfflineIdentity(), null);
+  assert.equal(isOfflineIdentityLocked(), true);
+  assert.doesNotThrow(() => invalidateOfflineIdentity());
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: win });
+});
+test('one storage event publishes once to each concurrent subscriber', () => {
+  let first = 0; let second = 0;
+  const a = subscribeOfflineIdentity(() => first++);
+  const b = subscribeOfflineIdentity(() => second++);
+  const event = new Event('storage');
+  Object.assign(event, { key: 'syncpad.offline-identity.v1' });
+  events.dispatchEvent(event);
+  a(); b();
+  assert.equal(first, 1);
+  assert.equal(second, 1);
+});
+test('persisted identity contains only user id, email and generation; malformed records lock', () => {
+  establishOfflineIdentity({ id: 'safe', email: 'safe@example.test', password: 'never-store', token: 'never-store' } as { id: string; email: string });
+  assert.doesNotMatch([...storage.values()].join(''), /never-store|password|token/);
+  storage.set('syncpad.offline-identity.v1', '{invalid');
+  assert.equal(readOfflineIdentity(), null);
+  assert.equal(isOfflineIdentityLocked(), true);
+});

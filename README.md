@@ -281,8 +281,8 @@ la hidratación obsoleta sin aplicar datos. Se verificaron 16/16 tests
 con persistencia real sobre fake-indexeddb, lint, typecheck, build y typecheck
 posterior sin errores (Node.js 22.16.0/npm 10.9.2).
 
-Esto no entrega una recarga offline completa: el shell depende de #26 y la
-navegación/metadata de #30; el acceso y los listados aún requieren red. No se
+La entrega original no incluía recarga offline completa: dependía del shell
+de #26 y de la navegación/metadata de #30 (descrita más abajo). No se
 añaden reconexión ni edición desconectada, y la UI autenticada no se ejercitó
 en esta verificación. Se sustituyó `y-indexeddb` 9.0.12 tras reproducir sus
 rechazos no manejados y su promesa de hidratación pendiente ante errores.
@@ -304,3 +304,26 @@ y typecheck posterior. La prueba real de control del worker y recarga offline
 está pendiente; abrir notas visitadas tras recargar y verificar logout depende
 de #30. #26 sigue abierta: no se afirma aceptación offline completa. Evidencia,
 política del caché y límites en [docs/issues/026-app-shell.md](docs/issues/026-app-shell.md).
+
+## Navegación offline por usuario (#30, aceptación pendiente)
+
+La portada recupera identidad local y metadata por usuario únicamente ante
+fallos de transporte. IndexedDB conserva títulos, workspaces y visitas;
+offline solo se ofrecen notas previamente hidratadas. Logout bloquea la UI
+local inmediatamente y notifica a otras pestañas, aunque no pueda revocar la
+cookie por falta de red. La recarga no desbloquea ese registro: requiere login
+explícito. No se guardan contraseñas, tokens ni respuestas HTTP privadas.
+
+Al volver online se valida la sesión y se refrescan resúmenes conservando la
+selección, sin recrear el documento Yjs. Las denegaciones no usan fallback y
+los recursos conocidos como eliminados/inaccesibles pierden su metadata local.
+Un fallo de persistencia/purga bloquea conservadoramente el acceso local para
+no reutilizar metadata potencialmente revocada. El caché no es cifrado ni
+borrado seguro del perfil compartido.
+
+Verificado automáticamente: frontend 52/52 tests, backend 54/54, lint,
+typecheck y build de ambos; postbuild y typecheck posterior del frontend.
+La UI nueva no se ejercitó en navegador en esta implementación. La aceptación
+de recarga offline, dos pestañas/logout, cambio de cuenta y reconexión queda
+para el controlador; #25/#26/#30 siguen abiertas. Evidencia en
+[docs/issues/030-offline-navigation.md](docs/issues/030-offline-navigation.md).

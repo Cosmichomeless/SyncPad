@@ -4,23 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyEditorUpdate, createEditorDocument, encodeEditorState, type EditorDocument } from '../lib/note-document';
 import { persistNote } from '../lib/note-persistence';
+import { HttpError, NetworkError, request } from '../lib/api-request';
+import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
+import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001';
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
-
-async function request<T>(path: string, init: RequestInit = {}) {
-  const headers = new Headers(init.headers);
-  headers.set('content-type', 'application/json');
-  if (init.method && init.method !== 'GET') {
-    const csrf = await fetch(API_URL + '/auth/csrf', { credentials: 'include' });
-    const csrfBody = await csrf.json() as { csrfToken: string };
-    headers.set('x-csrf-token', csrfBody.csrfToken);
-  }
-  const response = await fetch(API_URL + path, { ...init, headers, credentials: 'include' });
-  const body = response.status === 204 ? undefined : await response.json() as T | { error?: { message?: string } };
-  if (!response.ok) throw new Error((body as { error?: { message?: string } })?.error?.message ?? 'No se pudo completar la operación');
-  return body as T;
-}
 
 export default function Home() {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
@@ -38,93 +26,246 @@ export default function Home() {
   const [syncState, setSyncState] = useState<'desconectado' | 'conectando' | 'conectado'>('desconectado');
   const documentRef = useRef<EditorDocument | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const identityRef = useRef<OfflineIdentity | null>(null);
+  const workspaceRef = useRef<WorkspaceSummary | null>(null);
+  const noteRef = useRef<NoteSummary | null>(null);
+  const navigationRef = useRef(0);
+  const authRequestRef = useRef(0);
 
   const setSelectedNote = useCallback((note: NoteSummary | null) => {
+    noteRef.current = note;
     setEditorText('');
     setSyncState('desconectado');
     updateSelectedNote(note);
   }, []);
 
-  const selectWorkspace = useCallback(async (workspace: WorkspaceSummary) => {
-    setSelectedWorkspace(workspace);
-    setSelectedNote(null);
-    const result = await request<{ notes: NoteSummary[] }>(`/workspaces/${workspace.id}/notes`);
-    setNotes(result.notes);
+  const clearPrivateUI = useCallback(() => {
+    identityRef.current = null; workspaceRef.current = null;
+    navigationRef.current++; authRequestRef.current++;
+    socketRef.current?.close(); socketRef.current = null;
+    documentRef.current = null;
+    setUser(null); setWorkspaces([]); setNotes([]); setSelectedWorkspace(null); setSelectedNote(null);
+    setWorkspaceName(''); setNoteTitle(''); setPassword(''); setEmail('');
   }, [setSelectedNote]);
 
-  const loadWorkspaceList = useCallback(async () => {
-    const result = await request<{ workspaces: WorkspaceSummary[] }>('/workspaces');
-    setWorkspaces(result.workspaces);
-    if (result.workspaces[0]) await selectWorkspace(result.workspaces[0]);
-  }, [selectWorkspace]);
+  const handleFailure = useCallback(async (cause: unknown, identity: OfflineIdentity, workspaceId?: string) => {
+    if (!isCurrentIdentity(identity)) return;
+    setError(cause instanceof Error ? cause.message : 'No se pudo completar la operación');
+    if (cause instanceof HttpError && cause.status === 401) {
+      invalidateOfflineIdentity(); clearPrivateUI();
+      await clearUserMetadata(identity.user.id);
+    } else if (cause instanceof HttpError && [403, 404].includes(cause.status)) {
+      if (workspaceId) {
+        if (workspaceRef.current?.id === workspaceId) {
+          workspaceRef.current = null; setSelectedWorkspace(null); setNotes([]); setSelectedNote(null);
+        }
+        setWorkspaces(current => current.filter(row => row.id !== workspaceId));
+        await removeWorkspace(identity.user.id, workspaceId);
+      } else {
+        workspaceRef.current = null; setSelectedWorkspace(null); setWorkspaces([]); setNotes([]); setSelectedNote(null);
+        await clearUserMetadata(identity.user.id);
+      }
+    }
+  }, [clearPrivateUI, setSelectedNote]);
+
+  const cacheFailure = useCallback((cause: unknown, identity: OfflineIdentity) => {
+    if (!isCurrentIdentity(identity)) return;
+    invalidateOfflineIdentity(); clearPrivateUI();
+    setError(cause instanceof Error ? `Almacenamiento local: ${cause.message}. Vuelve a entrar para continuar.` : 'No se pudo guardar la navegación local. Vuelve a entrar para continuar.');
+  }, [clearPrivateUI]);
+
+  const selectWorkspace = useCallback(async (workspace: WorkspaceSummary, preserve = false) => {
+    const identity = identityRef.current;
+    if (!identity || !isCurrentIdentity(identity)) return;
+    const selection = ++navigationRef.current;
+    workspaceRef.current = workspace; setSelectedWorkspace(workspace);
+    if (!preserve) { setSelectedNote(null); setNotes([]); }
+    try {
+      let rows: NoteSummary[];
+      try {
+        rows = (await request<{ notes: NoteSummary[] }>(`/workspaces/${workspace.id}/notes`)).notes;
+        if (!isCurrentIdentity(identity) || navigationRef.current !== selection) return;
+        await writeNotes(identity, workspace.id, rows).catch(cause => cacheFailure(cause, identity));
+      } catch (cause) {
+        if (!(cause instanceof NetworkError)) throw cause;
+        const cached = await readNotes(identity.user.id, workspace.id);
+        const visited = await readVisitedNoteIds(identity.user.id);
+        rows = (cached ?? []).filter(note => visited.includes(note.id));
+      }
+      if (!isCurrentIdentity(identity) || navigationRef.current !== selection) return;
+      setNotes(rows);
+      if (noteRef.current) {
+        const selected = rows.find(row => row.id === noteRef.current?.id) ?? null;
+        if (!selected) setSelectedNote(null);
+        else { noteRef.current = selected; updateSelectedNote(selected); }
+      }
+      return rows;
+    } catch (cause) {
+      if (navigationRef.current === selection && isCurrentIdentity(identity))
+        await handleFailure(cause, identity, workspace.id).catch(cause => cacheFailure(cause, identity));
+    }
+  }, [setSelectedNote, handleFailure, cacheFailure]);
+
+  const loadWorkspaceList = useCallback(async (identity: OfflineIdentity) => {
+    const selection = navigationRef.current;
+    try {
+      let rows: WorkspaceSummary[];
+      try {
+        rows = (await request<{ workspaces: WorkspaceSummary[] }>('/workspaces')).workspaces;
+        if (!isCurrentIdentity(identity)) return;
+        await writeWorkspaces(identity, rows).catch(cause => cacheFailure(cause, identity));
+      } catch (cause) {
+        if (!(cause instanceof NetworkError)) throw cause;
+        rows = await readWorkspaces(identity.user.id) ?? [];
+      }
+      if (!isCurrentIdentity(identity)) return;
+      setWorkspaces(rows);
+      if (navigationRef.current !== selection) return;
+      const previous = workspaceRef.current;
+      const workspace = previous ? rows.find(row => row.id === previous.id) : rows[0];
+      if (workspace) await selectWorkspace(workspace, !!previous);
+      else { workspaceRef.current = null; setSelectedWorkspace(null); setNotes([]); setSelectedNote(null); }
+    } catch (cause) { await handleFailure(cause, identity).catch(cause => cacheFailure(cause, identity)); }
+  }, [selectWorkspace, setSelectedNote, handleFailure, cacheFailure]);
 
   useEffect(() => {
-    void request<{ user: { id: string; email: string } }>('/auth/me')
-      .then((result) => { setUser(result.user); return loadWorkspaceList(); })
-      .catch(() => undefined);
-  }, [loadWorkspaceList]);
+    let cancelled = false;
+    const stop = subscribeOfflineIdentity(value => {
+      if (identityRef.current && value?.generation !== identityRef.current.generation) clearPrivateUI();
+    });
+    const authenticate = async () => {
+      if (isOfflineIdentityLocked()) return;
+      const generation = readOfflineGeneration();
+      const attempt = ++authRequestRef.current;
+      let identity: OfflineIdentity | null;
+      try {
+        const result = await request<{ user: OfflineIdentity['user'] }>('/auth/me');
+        if (cancelled || attempt !== authRequestRef.current || generation !== readOfflineGeneration() || isOfflineIdentityLocked()) return;
+        const cached = readOfflineIdentity();
+        if (identityRef.current && identityRef.current.user.id !== result.user.id) clearPrivateUI();
+        identity = cached?.user.id === result.user.id ? cached : establishOfflineIdentity(result.user);
+      } catch (cause) {
+        if (cancelled || attempt !== authRequestRef.current || generation !== readOfflineGeneration()) return;
+        if (cause instanceof HttpError && [401, 403].includes(cause.status)) {
+          const old = readOfflineIdentity();
+          invalidateOfflineIdentity(); clearPrivateUI();
+          const lockedGeneration = readOfflineGeneration();
+          if (old) await clearUserMetadata(old.user.id).catch(() => {
+            if (lockedGeneration === readOfflineGeneration()) setError('Sesión bloqueada. No se pudo limpiar la navegación local.');
+          });
+          return;
+        }
+        if (!(cause instanceof NetworkError)) { setError(cause instanceof Error ? cause.message : 'No se pudo validar la sesión'); return; }
+        identity = readOfflineIdentity();
+      }
+      if (cancelled || !identity || !isCurrentIdentity(identity)) return;
+      identityRef.current = identity; setUser(identity.user);
+      await loadWorkspaceList(identity);
+    };
+    void authenticate();
+    const online = () => { void authenticate(); };
+    window.addEventListener('online', online);
+    return () => { cancelled = true; stop(); window.removeEventListener('online', online); };
+  }, [loadWorkspaceList, clearPrivateUI]);
 
   async function submitAuth(mode: 'login' | 'register') {
     setBusy(true); setError('');
+    const generation = readOfflineGeneration();
+    const attempt = ++authRequestRef.current;
     try {
       const result = await request<{ user: { id: string; email: string } }>(`/auth/${mode}`, {
         method: 'POST', body: JSON.stringify({ email, password }),
       });
-      setUser(result.user); setPassword(''); await loadWorkspaceList();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo iniciar sesión'); }
+      if (attempt !== authRequestRef.current || generation !== readOfflineGeneration()) return;
+      clearPrivateUI();
+      const identity = establishOfflineIdentity(result.user);
+      identityRef.current = identity;
+      setUser(result.user); setPassword(''); await loadWorkspaceList(identity);
+    } catch (cause) {
+      if (attempt === authRequestRef.current && generation === readOfflineGeneration())
+        setError(cause instanceof Error ? cause.message : 'No se pudo iniciar sesión');
+    }
     finally { setBusy(false); }
   }
 
   async function createWorkspace() {
+    const identity = identityRef.current;
+    if (!identity || !isCurrentIdentity(identity)) return;
+    const selection = navigationRef.current;
     setBusy(true); setError('');
-    try { const result = await request<{ workspace: WorkspaceSummary }>('/workspaces', { method: 'POST', body: JSON.stringify({ name: workspaceName }) }); setWorkspaceName(''); await loadWorkspaceList(); await selectWorkspace(result.workspace); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo crear el workspace'); }
+    try {
+      const result = await request<{ workspace: WorkspaceSummary }>('/workspaces', { method: 'POST', body: JSON.stringify({ name: workspaceName }) });
+      if (!isCurrentIdentity(identity)) return;
+      setWorkspaceName('');
+      if (navigationRef.current === selection) await selectWorkspace(result.workspace);
+      if (isCurrentIdentity(identity)) await loadWorkspaceList(identity);
+    }
+    catch (cause) { await handleFailure(cause, identity).catch(cause => cacheFailure(cause, identity)); }
     finally { setBusy(false); }
   }
 
   async function createNote() {
-    if (!selectedWorkspace) return;
+    const identity = identityRef.current;
+    const workspace = workspaceRef.current;
+    const selection = navigationRef.current;
+    if (!identity || !workspace || !isCurrentIdentity(identity)) return;
     setBusy(true); setError('');
-    try { const result = await request<{ note: NoteSummary }>(`/workspaces/${selectedWorkspace.id}/notes`, { method: 'POST', body: JSON.stringify({ title: noteTitle }) }); setNoteTitle(''); setNotes((current) => [result.note, ...current]); setSelectedNote(result.note); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'No se pudo crear la nota'); }
+    try {
+      const result = await request<{ note: NoteSummary }>(`/workspaces/${workspace.id}/notes`, { method: 'POST', body: JSON.stringify({ title: noteTitle }) });
+      if (!isCurrentIdentity(identity) || navigationRef.current !== selection) return;
+      setNoteTitle('');
+      const rows = await selectWorkspace(workspace, true);
+      if (!isCurrentIdentity(identity) || navigationRef.current !== selection + 1) return;
+      const note = rows?.find(row => row.id === result.note.id);
+      if (note) setSelectedNote(note);
+    }
+    catch (cause) { if (navigationRef.current === selection) await handleFailure(cause, identity, workspace.id).catch(cause => cacheFailure(cause, identity)); }
     finally { setBusy(false); }
   }
 
+  const userId = user?.id;
+  const noteId = selectedNote?.id;
   useEffect(() => {
-    if (!user?.id || !selectedNote) return;
+    const identity = identityRef.current;
+    const note = noteRef.current;
+    if (!userId || !noteId || !identity || !note || !isCurrentIdentity(identity)) return;
     const document = createEditorDocument();
     let cancelled = false;
-    const persistence = persistNote(user.id, selectedNote.id, document.doc, () => {
-      if (!cancelled) setError('No se pudo guardar en el almacenamiento local');
+    let hydrated = false;
+    const persistence = persistNote(userId, noteId, document.doc, () => {
+      if (!cancelled && isCurrentIdentity(identity)) setError('No se pudo guardar en el almacenamiento local');
     });
     let socket: WebSocket | null = null;
     documentRef.current = document;
     const observeContent = () => {
-      if (!cancelled) setEditorText(document.content.toString());
+      if (hydrated && !cancelled && isCurrentIdentity(identity)) setEditorText(document.content.toString());
     };
     document.content.observe(observeContent);
-    void persistence.whenSynced.then(() => {
-      if (cancelled) return;
+    void persistence.whenSynced.then(async () => {
+      if (cancelled || !isCurrentIdentity(identity)) return;
+      await markVisited(identity, note).catch(cause => cacheFailure(cause, identity));
+      if (cancelled || !isCurrentIdentity(identity)) return;
+      hydrated = true;
       setEditorText(document.content.toString());
       setSyncState('conectando');
-      const connection = new WebSocket(`${WS_URL}?noteId=${selectedNote.id}`);
+      const connection = new WebSocket(`${WS_URL}?noteId=${noteId}`);
       socket = connection;
       socketRef.current = connection;
       connection.onopen = () => {
-        if (cancelled) return;
+        if (cancelled || !isCurrentIdentity(identity)) return;
         setSyncState('conectado');
         connection.send(JSON.stringify({ type: 'sync-request' }));
       };
       connection.onmessage = (event) => {
-        if (cancelled) return;
+        if (cancelled || !isCurrentIdentity(identity)) return;
         const message = JSON.parse(event.data as string) as { type: string; update?: string };
         if (message.update && (message.type === 'sync' || message.type === 'update')) {
           applyEditorUpdate(document.doc, Uint8Array.from(atob(message.update), (character) => character.charCodeAt(0)));
         }
       };
-      connection.onclose = () => { if (!cancelled) setSyncState('desconectado'); };
+      connection.onclose = () => { if (!cancelled && isCurrentIdentity(identity)) setSyncState('desconectado'); };
     }).catch(() => {
-      if (!cancelled) setError('No se pudo abrir el almacenamiento local');
+      if (!cancelled && isCurrentIdentity(identity)) setError('No se pudo abrir el almacenamiento local');
     });
     return () => {
       cancelled = true;
@@ -137,9 +278,10 @@ export default function Home() {
         () => document.doc.destroy(),
       );
     };
-  }, [user?.id, selectedNote]);
+  }, [userId, noteId, cacheFailure]);
 
   function editContent(value: string) {
+    if (!identityRef.current || !isCurrentIdentity(identityRef.current)) return;
     const document = documentRef.current;
     if (!document || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
     document.doc.transact(() => {
@@ -151,8 +293,14 @@ export default function Home() {
   }
 
   async function logout() {
-    await request('/auth/logout', { method: 'POST' });
-    setUser(null); setWorkspaces([]); setNotes([]); setSelectedWorkspace(null); setSelectedNote(null);
+    invalidateOfflineIdentity(); clearPrivateUI(); setError('');
+    const generation = readOfflineGeneration();
+    try { await request('/auth/logout', { method: 'POST' }); }
+    catch (cause) {
+      if (generation === readOfflineGeneration()) setError(cause instanceof NetworkError
+        ? 'Sesión local cerrada. Sin conexión no se pudo revocar la sesión del servidor; vuelve a entrar explícitamente para continuar.'
+        : 'Sesión local cerrada. No se pudo revocar la sesión del servidor.');
+    }
   }
 
   if (!user) return (

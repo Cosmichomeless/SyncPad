@@ -121,3 +121,14 @@ protege frente a acceso al perfil del navegador. Las modificaciones previas
 de tests backend, next-env.d.ts y globals.css quedan fuera de esta entrega.
 La entrega documental queda lista para PR/integración; no se cierra la issue
 hasta verificar la recarga completa offline junto con #26/#30.
+
+## Integración de navegación #30 — aceptación pendiente
+
+#30 incorpora recuperación de identidad y metadata por usuario, navegación de
+notas visitadas y bloqueo local al cerrar sesión. La hidratación Yjs conserva
+el adaptador de #25; refrescar resúmenes no recrea el documento seleccionado.
+Frontend 52/52 y backend 54/54 tests pasan, junto con lint/typecheck/build y
+postbuild/typecheck posterior del frontend. No se ejercitó esta nueva
+integración en navegador por el implementador; recarga completa offline,
+cambio de cuenta y logout entre pestañas siguen pendientes del controlador.
+#25 continúa abierta. Evidencia: [#30](030-offline-navigation.md).
