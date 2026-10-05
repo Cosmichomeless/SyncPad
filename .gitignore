@@ -1,3 +1,7 @@
+# Generated production offline shell
+/frontend/public/sw.js
+/frontend/public/offline-shell.html
+
 # Logs
 logs
 *.log
