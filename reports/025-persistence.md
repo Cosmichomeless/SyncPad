@@ -51,7 +51,8 @@ con contenido vacío en reapertura inmediata/repetida. Ahora se comprueba el
 contenido exacto tras 30 ediciones antes de esperar destroy(), cinco reaperturas
 rápidas y rechazo de updates malformados; abortos y cancelación siguen cubiertos.
 Revisión independiente de especificación anterior (25250df..27d22ac): PASS;
-no cubre este cambio y la rerevisión de calidad sigue pendiente. En Chromium autenticado
+el cambio posterior fue aprobado por revisión independiente de calidad
+(`27d22ac..5472766`), con 19/19 tests y sin bloqueos. En Chromium autenticado
 se verificaron creación/edición, restauración con red bloqueada y el alert
 de almacenamiento denegado. Evidencia detallada en la entrega enlazada.
 No se repitió la prueba de navegador para el cambio de reapertura.

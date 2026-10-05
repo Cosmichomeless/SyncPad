@@ -110,12 +110,14 @@ completa todavía no. Las pruebas verifican el documento local, no la
 recuperación de toda la aplicación.
 El shell offline depende de #26 y la navegación/metadata de #30; /auth/me y
 los listados aún requieren red. No se añade edición desconectada ni reconexión.
-#25 permanece abierta y las revisiones independientes siguen siendo puerta
-previa a publicación.
+#25 permanece abierta. La revisión de especificación pasó; la revisión de
+calidad detectó la carrera de reapertura, corregida y aprobada en la revisión
+independiente de `27d22ac..5472766`, con 19/19 tests y sin bloqueos.
 
 El registro de updates es append-only, sin compactación automática: el uso
 prolongado puede aumentar almacenamiento/tiempo de lectura. Los datos no se
 borran al cerrar sesión ni están cifrados; separar claves por usuario no
 protege frente a acceso al perfil del navegador. Las modificaciones previas
 de tests backend, next-env.d.ts y globals.css quedan fuera de esta entrega.
-No se publican cambios ni se cierra la issue.
+La entrega documental queda lista para PR/integración; no se cierra la issue
+hasta verificar la recarga completa offline junto con #26/#30.
