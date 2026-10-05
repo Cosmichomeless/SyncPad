@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyEditorUpdate, createEditorDocument, encodeEditorState, type EditorDocument } from '../lib/note-document';
+import { persistNote } from '../lib/note-persistence';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001';
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
@@ -26,7 +27,7 @@ export default function Home() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
   const [selectedWorkspace, setSelectedWorkspace] = useState<WorkspaceSummary | null>(null);
-  const [selectedNote, setSelectedNote] = useState<NoteSummary | null>(null);
+  const [selectedNote, updateSelectedNote] = useState<NoteSummary | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [workspaceName, setWorkspaceName] = useState('');
@@ -38,12 +39,18 @@ export default function Home() {
   const documentRef = useRef<EditorDocument | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
+  const setSelectedNote = useCallback((note: NoteSummary | null) => {
+    setEditorText('');
+    setSyncState('desconectado');
+    updateSelectedNote(note);
+  }, []);
+
   const selectWorkspace = useCallback(async (workspace: WorkspaceSummary) => {
     setSelectedWorkspace(workspace);
     setSelectedNote(null);
     const result = await request<{ notes: NoteSummary[] }>(`/workspaces/${workspace.id}/notes`);
     setNotes(result.notes);
-  }, []);
+  }, [setSelectedNote]);
 
   const loadWorkspaceList = useCallback(async () => {
     const result = await request<{ workspaces: WorkspaceSummary[] }>('/workspaces');
@@ -84,25 +91,51 @@ export default function Home() {
   }
 
   useEffect(() => {
-    socketRef.current?.close();
-    documentRef.current?.doc.destroy();
-    documentRef.current = null;
-    if (!selectedNote) return;
+    if (!user?.id || !selectedNote) return;
     const document = createEditorDocument();
+    const persistence = persistNote(user.id, selectedNote.id, document.doc);
+    let cancelled = false;
+    let socket: WebSocket | null = null;
     documentRef.current = document;
-    const socket = new WebSocket(`${WS_URL}?noteId=${selectedNote.id}`);
-    socketRef.current = socket;
-    socket.onopen = () => { setSyncState('conectado'); socket.send(JSON.stringify({ type: 'sync-request' })); };
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data as string) as { type: string; update?: string };
-      if (message.update && (message.type === 'sync' || message.type === 'update')) {
-        applyEditorUpdate(document.doc, Uint8Array.from(atob(message.update), (character) => character.charCodeAt(0)));
-        setEditorText(document.content.toString());
-      }
+    const observeContent = () => {
+      if (!cancelled) setEditorText(document.content.toString());
     };
-    socket.onclose = () => setSyncState('desconectado');
-    return () => { socket.close(); document.doc.destroy(); };
-  }, [selectedNote]);
+    document.content.observe(observeContent);
+    void persistence.whenSynced.then(() => {
+      if (cancelled) return;
+      setEditorText(document.content.toString());
+      setSyncState('conectando');
+      const connection = new WebSocket(`${WS_URL}?noteId=${selectedNote.id}`);
+      socket = connection;
+      socketRef.current = connection;
+      connection.onopen = () => {
+        if (cancelled) return;
+        setSyncState('conectado');
+        connection.send(JSON.stringify({ type: 'sync-request' }));
+      };
+      connection.onmessage = (event) => {
+        if (cancelled) return;
+        const message = JSON.parse(event.data as string) as { type: string; update?: string };
+        if (message.update && (message.type === 'sync' || message.type === 'update')) {
+          applyEditorUpdate(document.doc, Uint8Array.from(atob(message.update), (character) => character.charCodeAt(0)));
+        }
+      };
+      connection.onclose = () => { if (!cancelled) setSyncState('desconectado'); };
+    }).catch(() => {
+      if (!cancelled) setError('No se pudo abrir el almacenamiento local');
+    });
+    return () => {
+      cancelled = true;
+      document.content.unobserve(observeContent);
+      socket?.close();
+      if (socketRef.current === socket) socketRef.current = null;
+      if (documentRef.current === document) documentRef.current = null;
+      void persistence.destroy().then(
+        () => document.doc.destroy(),
+        () => document.doc.destroy(),
+      );
+    };
+  }, [user?.id, selectedNote]);
 
   function editContent(value: string) {
     const document = documentRef.current;
@@ -140,7 +173,7 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       <section className="workspace-grid">
         <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form></aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => setSelectedNote(note)}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {syncState}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={syncState} /></div><textarea aria-label="Contenido de la nota" value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {syncState}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={syncState} /></div><textarea aria-label="Contenido de la nota" value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );
