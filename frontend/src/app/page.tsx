@@ -120,8 +120,14 @@ export default function Home() {
       }
       if (!isCurrentIdentity(identity)) return;
       setWorkspaces(rows);
-      if (navigationRef.current !== selection) return;
       const previous = workspaceRef.current;
+      if (previous && !rows.some(row => row.id === previous.id)) {
+        navigationRef.current++;
+        workspaceRef.current = null;
+        setSelectedWorkspace(null); setNotes([]); setSelectedNote(null);
+        return;
+      }
+      if (navigationRef.current !== selection) return;
       const workspace = previous ? rows.find(row => row.id === previous.id) : rows[0];
       if (workspace) await selectWorkspace(workspace, !!previous);
       else { workspaceRef.current = null; setSelectedWorkspace(null); setNotes([]); setSelectedNote(null); }

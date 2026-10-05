@@ -72,6 +72,23 @@ Regresión focalizada: RED 8 pass/5 fail por la política aún ausente; GREEN
 build/postbuild, typecheck posterior y diff check con exit 0. La aceptación
 en navegador y nueva revisión de la corrección siguen pendientes.
 
+La revisión de calidad detectó una segunda carrera: un listado autorizado
+que retira el workspace seleccionado podía purgar el caché sin cerrar el
+editor, al cambiar la navegación durante su petición. Chromium reprodujo
+RED (`sidebarRemoved: true, editorVisible: true`). Ahora la retirada se aplica
+antes del guarda de navegación y cancela las cargas afectadas; el mismo
+escenario pasó GREEN (`sidebarRemoved: true, editorVisible: false`).
+
+Regresión preservada en `frontend/tests/browser/workspace-revocation.cli.txt`.
+Es una función para `playwright-cli run-code --filename=...`, ejecutada sobre
+el perfil de prueba autenticado con workspace `Offline verification` y nota
+`Persistencia A` ya visitada, con frontend/backend locales 3000/3001. Intercepta
+solo peticiones de esa página: retrasa el listado autorizado, corta la red
+de notas, cambia selección, libera un listado vacío y comprueba que no quede
+editor. Las rutas se restauran en finally. No ejecutarla sobre un perfil real:
+la respuesta simulada purga su metadata local; los documentos Yjs se conservan.
+La suite node:test no ejecuta esta aceptación de navegador automáticamente.
+
 No se ejercitó esta UI en navegador durante esta implementación. No se usó
 ni controló la sesión `syncpad-verification` ni los servidores de prueba del
 controlador. Las pruebas automáticas no sustituyen los siguientes escenarios

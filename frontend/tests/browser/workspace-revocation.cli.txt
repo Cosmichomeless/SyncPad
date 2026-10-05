@@ -1,0 +1,27 @@
+async page => {
+  let releaseList;
+  let listStarted;
+  const release = new Promise(resolve => { releaseList = resolve; });
+  const started = new Promise(resolve => { listStarted = resolve; });
+  const listUrl = 'http://127.0.0.1:3001/workspaces';
+  const notesUrl = 'http://127.0.0.1:3001/workspaces/*/notes';
+  await page.route(listUrl, async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    listStarted();
+    await release;
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': 'http://127.0.0.1:3000', 'access-control-allow-credentials': 'true' }, body: JSON.stringify({ workspaces: [] }) });
+  });
+  await page.route(notesUrl, route => route.request().method() === 'GET' ? route.abort('connectionfailed') : route.continue());
+  try {
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await started;
+    await page.getByRole('button', { name: 'Offline verification', exact: true }).click();
+    await page.getByRole('button', { name: /^Persistencia A Actualizada/ }).click();
+    await page.getByRole('textbox', { name: 'Contenido de la nota' }).waitFor();
+    releaseList();
+    await page.waitForFunction(() => !Array.from(document.querySelectorAll('aside button')).some(button => button.textContent === 'Offline verification'), undefined, { timeout: 3000 });
+    const result = { sidebarRemoved: true, editorVisible: await page.getByRole('textbox', { name: 'Contenido de la nota' }).count() > 0 };
+    if (result.editorVisible) throw new Error('Authoritatively removed workspace editor remains visible: ' + JSON.stringify(result));
+    return result;
+  } finally { releaseList(); await page.unroute(listUrl); await page.unroute(notesUrl); }
+}
