@@ -89,6 +89,17 @@ editor. Las rutas se restauran en finally. No ejecutarla sobre un perfil real:
 la respuesta simulada purga su metadata local; los documentos Yjs se conservan.
 La suite node:test no ejecuta esta aceptación de navegador automáticamente.
 
+También se reprodujeron dos refrescos online simultáneos: la respuesta antigua
+podía volver a publicar metadata retirada por la más reciente. Se añadió un
+contador de peticiones de workspace, invalidado al limpiar identidad: un
+listado antiguo no escribe caché ni UI; las denegaciones vigentes siguen
+procesándose. Regresión Chromium RED con dos peticiones y
+`revokedWorkspaceReappeared: true`; GREEN con exactamente dos y `false`.
+Se conserva en `frontend/tests/browser/overlapping-refresh.cli.txt`, con los
+mismos requisitos de perfil/servicios y restauración de rutas en finally.
+Después del cambio: 57/57 tests, lint, typecheck, build/postbuild y typecheck
+posterior correctos.
+
 No se ejercitó esta UI en navegador durante esta implementación. No se usó
 ni controló la sesión `syncpad-verification` ni los servidores de prueba del
 controlador. Las pruebas automáticas no sustituyen los siguientes escenarios

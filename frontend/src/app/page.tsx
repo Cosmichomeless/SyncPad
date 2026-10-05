@@ -31,6 +31,7 @@ export default function Home() {
   const noteRef = useRef<NoteSummary | null>(null);
   const navigationRef = useRef(0);
   const authRequestRef = useRef(0);
+  const workspaceRequestRef = useRef(0);
 
   const setSelectedNote = useCallback((note: NoteSummary | null) => {
     noteRef.current = note;
@@ -41,7 +42,7 @@ export default function Home() {
 
   const clearPrivateUI = useCallback(() => {
     identityRef.current = null; workspaceRef.current = null;
-    navigationRef.current++; authRequestRef.current++;
+    navigationRef.current++; authRequestRef.current++; workspaceRequestRef.current++;
     socketRef.current?.close(); socketRef.current = null;
     documentRef.current = null;
     setUser(null); setWorkspaces([]); setNotes([]); setSelectedWorkspace(null); setSelectedNote(null);
@@ -108,17 +109,18 @@ export default function Home() {
 
   const loadWorkspaceList = useCallback(async (identity: OfflineIdentity) => {
     const selection = navigationRef.current;
+    const refresh = ++workspaceRequestRef.current;
     try {
       let rows: WorkspaceSummary[];
       try {
         rows = (await request<{ workspaces: WorkspaceSummary[] }>('/workspaces')).workspaces;
-        if (!isCurrentIdentity(identity)) return;
+        if (!isCurrentIdentity(identity) || refresh !== workspaceRequestRef.current) return;
         await writeWorkspaces(identity, rows).catch(cause => cacheFailure(cause, identity));
       } catch (cause) {
         if (!(cause instanceof NetworkError)) throw cause;
         rows = await readWorkspaces(identity.user.id) ?? [];
       }
-      if (!isCurrentIdentity(identity)) return;
+      if (!isCurrentIdentity(identity) || refresh !== workspaceRequestRef.current) return;
       setWorkspaces(rows);
       const previous = workspaceRef.current;
       if (previous && !rows.some(row => row.id === previous.id)) {
@@ -131,7 +133,10 @@ export default function Home() {
       const workspace = previous ? rows.find(row => row.id === previous.id) : rows[0];
       if (workspace) await selectWorkspace(workspace, !!previous);
       else { workspaceRef.current = null; setSelectedWorkspace(null); setNotes([]); setSelectedNote(null); }
-    } catch (cause) { await handleFailure(cause, identity).catch(cause => cacheFailure(cause, identity)); }
+    } catch (cause) {
+      if (isCurrentIdentity(identity) && shouldHandleRequestFailure(cause, refresh === workspaceRequestRef.current))
+        await handleFailure(cause, identity).catch(cause => cacheFailure(cause, identity));
+    }
   }, [selectWorkspace, setSelectedNote, handleFailure, cacheFailure]);
 
   useEffect(() => {

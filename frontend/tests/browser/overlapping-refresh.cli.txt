@@ -1,0 +1,28 @@
+async page => {
+  await page.reload();
+  await page.getByRole('button', { name: 'Offline verification', exact: true }).waitFor();
+  const original = await page.evaluate(async () => (await fetch('http://127.0.0.1:3001/workspaces', { credentials: 'include' })).json());
+  let releaseFirst; let firstStarted; let requestCount = 0;
+  const release = new Promise(resolve => { releaseFirst = resolve; });
+  const started = new Promise(resolve => { firstStarted = resolve; });
+  const listUrl = 'http://127.0.0.1:3001/workspaces';
+  const headers = { 'access-control-allow-origin': 'http://127.0.0.1:3000', 'access-control-allow-credentials': 'true' };
+  await page.route(listUrl, async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const order = ++requestCount;
+    if (order === 1) { firstStarted(); await release; }
+    await route.fulfill({ status: 200, contentType: 'application/json', headers, body: JSON.stringify(order === 1 ? original : { workspaces: [] }) });
+  });
+  try {
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await started;
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await page.waitForFunction(() => !Array.from(document.querySelectorAll('aside button')).some(button => button.textContent === 'Offline verification'), undefined, { timeout: 3000 });
+    releaseFirst();
+    await page.waitForLoadState('networkidle', { timeout: 5000 });
+    const result = { requests: requestCount, revokedWorkspaceReappeared: await page.getByRole('button', { name: 'Offline verification', exact: true }).count() > 0 };
+    if (requestCount !== 2) throw new Error('Expected exactly two workspace refreshes');
+    if (result.revokedWorkspaceReappeared) throw new Error('Older workspace refresh resurrected revoked metadata: ' + JSON.stringify(result));
+    return result;
+  } finally { releaseFirst(); await page.unroute(listUrl); }
+}
