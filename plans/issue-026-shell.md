@@ -1,5 +1,9 @@
 # Offline application shell Implementation Plan
 
+> [!NOTE]
+> Para el estado implementado y sus límites:
+> [Informe de entrega](../reports/026-shell.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use compose:subagent to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Load the anonymous SyncPad application shell offline (#26 infrastructure).

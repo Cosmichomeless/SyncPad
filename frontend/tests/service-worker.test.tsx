@@ -177,8 +177,13 @@ test('postbuild copies anonymous HTML and maps static files to public Next asset
 
 test('postbuild fails closed for missing HTML and dynamic or revalidated root output', async () => {
   await buildFixture(async (directory) => {
-    for (const routes of [{}, { '/': { initialRevalidateSeconds: 60 } }]) {
-      await writeFile(path.join(directory, '.next/prerender-manifest.json'), JSON.stringify({ routes, dynamicRoutes: {} }));
+    const manifests = [
+      { routes: {}, dynamicRoutes: {} },
+      { routes: { '/': { initialRevalidateSeconds: 60 } }, dynamicRoutes: {} },
+      { routes: { '/': { initialRevalidateSeconds: false } }, dynamicRoutes: { '/': {} } },
+    ];
+    for (const manifest of manifests) {
+      await writeFile(path.join(directory, '.next/prerender-manifest.json'), JSON.stringify(manifest));
       const result = spawnSync(process.execPath, [generatorPath], { cwd: directory, encoding: 'utf8' });
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /Root must be statically prerendered/);

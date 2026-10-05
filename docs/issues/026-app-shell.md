@@ -63,11 +63,24 @@ exacta, URL pública de assets y rechazo de HTML ausente o root dinámica/ISR.
 La importación del módulo ESM en tests es dinámica para conservar el runner
 actual `tsx` sin cambiar la configuración del proyecto.
 
-## Verificación pendiente
+## Verificación en navegador del controlador principal
 
-No se ejercitó la UI ni se usó el navegador o reinició ningún proceso existente
-desde el implementador. El controlador principal verificará instalación/control
-del worker, recarga offline y contenido de CacheStorage contra producción. Los
-tests VM no sustituyen esa aceptación de navegador. La restauración privada y
-las pruebas de logout/cambio de cuenta se verifican al integrar #30; no se
-implementa caché de sesiones ni metadata privada en este cambio.
+Se repitieron tests (29/29), lint, typecheck, build/postbuild y typecheck
+posterior, todos correctos. Se reinició exclusivamente el Next de prueba
+iniciado por este agente y se usó Chromium con Playwright CLI.
+
+- Tras recarga online, `navigator.serviceWorker.controller` es verdadero.
+- CacheStorage contiene un único caché SyncPad con 13 entradas: el shell
+  anónimo y 12 assets `/_next/static/`.
+- Red bloqueada con Playwright y recarga completa de `/`: título SyncPad,
+  formulario de acceso y worker controlando la página; `navigator.onLine` falso.
+- El shell cacheado no contiene el email ni contenido de la nota de prueba.
+- No hay entradas `/auth`, `/workspaces` ni `/notes` en CacheStorage.
+
+La restauración de notas/navegación privada y las pruebas de logout/cambio de
+cuenta requieren #30. No se implementa caché de sesiones ni metadata privada
+en este cambio. #26 permanece abierta hasta verificar esa aceptación completa.
+
+Revisiones independientes de especificación y calidad: aprobadas. La única
+observación menor era una fixture dinámica ausente; se añadió un manifest
+con `dynamicRoutes['/']` y se comprobó su rechazo sin cambiar implementación.
