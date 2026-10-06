@@ -119,5 +119,11 @@ Para la visión de conjunto, ver [../architecture.md](../architecture.md).
 
 ## Despliegue y publicación
 
-Pendiente de documentar en este directorio: #64 en adelante. El despliegue y la
-demo pública dependen de #64–#67 y de la elección de hosting.
+| Issue | Documento |
+| --- | --- |
+| #64 | [Elección de hosting gratuito](064-hosting.md) |
+| #65 | [HTTPS, WSS y secretos de producción](065-https-secrets.md) |
+| #66 | [PostgreSQL gestionado, migraciones y copias](066-postgres-backups.md) |
+| #67 | [Configuración de despliegue y prueba con dos usuarios](067-deploy.md) |
+| #68 | [Humo posterior al despliegue y recuperación](068-post-deploy-smoke.md) |
+| #69 | [Demo pública, capturas y release](069-release.md) |
