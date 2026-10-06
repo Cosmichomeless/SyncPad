@@ -5,9 +5,15 @@ const DOCUMENT_SCHEMA_VERSION = 1;
 /** Every replica writes the initial version under this client id so they all create the same Yjs item. */
 const BOOTSTRAP_CLIENT_ID = 0;
 
+export const LOCAL_EDIT_ORIGIN = Symbol('syncpad.local-edit');
+/** Consecutive keystrokes closer than this share one undo step. */
+const UNDO_CAPTURE_MS = 500;
+
 export type EditorDocument = {
   doc: Y.Doc;
   content: Y.Text;
+  /** Undo/redo stack of this replica's own edits only; remote and restored content is never on it. */
+  history: Y.UndoManager;
 };
 
 /** The state this build is asked to apply declares a schema version it cannot read. */
@@ -25,7 +31,10 @@ export function createEditorDocument(): EditorDocument {
   doc.clientID = BOOTSTRAP_CLIENT_ID;
   root.set('schemaVersion', DOCUMENT_SCHEMA_VERSION);
   doc.clientID = clientID;
-  return { doc, content: doc.getText('content') };
+  const content = doc.getText('content');
+  // Only edits typed here are tracked, so undo can never revert what other participants wrote.
+  const history = new Y.UndoManager(content, { trackedOrigins: new Set([LOCAL_EDIT_ORIGIN]), captureTimeout: UNDO_CAPTURE_MS });
+  return { doc, content, history };
 }
 
 /**
@@ -44,9 +53,26 @@ export function assertCompatibleUpdate(document: Y.Doc, update: Uint8Array) {
   }
 }
 
-export const LOCAL_EDIT_ORIGIN = Symbol('syncpad.local-edit');
 /** Origin for updates that arrive from the server; they never count as pending local work. */
 export const REMOTE_ORIGIN = Symbol('syncpad.remote');
+
+/**
+ * True for changes made by this replica, including the ones produced by undo/redo: they are new
+ * local work that must reach the server, unlike remote or restored updates.
+ */
+export function isLocalChange(origin: unknown): boolean {
+  return origin === LOCAL_EDIT_ORIGIN || origin instanceof Y.UndoManager;
+}
+
+/** Reverts this replica's latest edit step. Returns false when there is nothing of its own to undo. */
+export function undoLocalEdit(document: EditorDocument): boolean {
+  return document.history.undo() !== null;
+}
+
+/** Re-applies the step that undoLocalEdit reverted, unless a newer local edit replaced it. */
+export function redoLocalEdit(document: EditorDocument): boolean {
+  return document.history.redo() !== null;
+}
 
 export function applyEditorUpdate(document: Y.Doc, update: Uint8Array, origin?: unknown) {
   Y.applyUpdate(document, update, origin);

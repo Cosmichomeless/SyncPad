@@ -1,5 +1,5 @@
 import type { ClientSyncMessage, ServerSyncMessage } from '@syncpad/shared';
-import { applyEditorUpdate, assertCompatibleUpdate, encodeEditorStateSince, encodeEditorStateVector, LOCAL_EDIT_ORIGIN, NoteSchemaError, REMOTE_ORIGIN, type EditorDocument } from './note-document';
+import { applyEditorUpdate, assertCompatibleUpdate, encodeEditorStateSince, encodeEditorStateVector, isLocalChange, NoteSchemaError, REMOTE_ORIGIN, type EditorDocument } from './note-document';
 
 export type SyncState = 'offline' | 'reconnecting' | 'syncing' | 'up-to-date';
 export type NoteSyncHandle = { retry(): void; destroy(): void };
@@ -289,7 +289,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   }
 
   const onDocumentUpdate = (_update: Uint8Array, origin: unknown) => {
-    if (origin !== LOCAL_EDIT_ORIGIN) return;
+    if (!isLocalChange(origin)) return;
     localRevision++;
     sendUpload();
     publish();

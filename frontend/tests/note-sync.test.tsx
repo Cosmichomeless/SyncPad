@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as Y from 'yjs';
-import { applyEditorUpdate, applyLocalTextEdit, createEditorDocument, encodeEditorState, type EditorDocument } from '../src/lib/note-document';
+import { applyEditorUpdate, applyLocalTextEdit, createEditorDocument, encodeEditorState, undoLocalEdit, type EditorDocument } from '../src/lib/note-document';
 import { createNoteSync, type NoteProbe, type SyncState } from '../src/lib/note-sync';
 
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
@@ -552,5 +552,26 @@ test('compatible remote updates keep applying normally', async () => {
   h.current().receive({ type: 'update', update: b64(encodeEditorState(remote.doc)) });
   assert.equal(text(h.document), 'desde otro cliente');
   assert.equal(h.incompatible.length, 0);
+  h.sync.destroy();
+});
+
+test('an undo is local work: it is pending until acknowledged and then reaches the server', async () => {
+  const server = new FakeServer();
+  const h = harness({ server });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  applyLocalTextEdit(h.document, 'uno');
+  h.document.history.stopCapturing();
+  applyLocalTextEdit(h.document, 'uno dos');
+  await until(() => server.text() === 'uno dos' && h.state() === 'up-to-date', 'edits acknowledged');
+
+  server.holdAcks = true;
+  undoLocalEdit(h.document);
+  assert.equal(text(h.document), 'uno');
+  assert.equal(h.pending[h.pending.length - 1], true);
+  await until(() => server.text() === 'uno', 'undo uploaded');
+  server.holdAcks = false;
+  server.releaseAcks();
+  await until(() => h.pending[h.pending.length - 1] === false, 'undo acknowledged');
   h.sync.destroy();
 });
