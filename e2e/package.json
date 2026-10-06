@@ -1,0 +1,19 @@
+{
+  "name": "syncpad-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0 <23"
+  },
+  "scripts": {
+    "install:browsers": "playwright install chromium",
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "22.20.5",
+    "typescript": "6.0.3"
+  }
+}

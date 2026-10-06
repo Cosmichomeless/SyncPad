@@ -59,7 +59,7 @@ storage con suscriptores concurrentes, bloqueo durable leído en un proceso
 nuevo, aislamiento de metadata, vacío versus miss, visitas, purgas, apertura
 fallida y aborts reales de IndexedDB incluso después de request success.
 
-## Aceptación pendiente del controlador
+## Correcciones de la revisión
 
 La revisión de especificación detectó un guarda de navegación que descartaba
 denegaciones tardías de la identidad vigente. Se corrigió la política común
@@ -100,22 +100,27 @@ mismos requisitos de perfil/servicios y restauración de rutas en finally.
 Después del cambio: 57/57 tests, lint, typecheck, build/postbuild y typecheck
 posterior correctos.
 
-No se ejercitó esta UI en navegador durante esta implementación. No se usó
-ni controló la sesión `syncpad-verification` ni los servidores de prueba del
-controlador. Las pruebas automáticas no sustituyen los siguientes escenarios
-de producción, que siguen pendientes:
+## Aceptación en navegador (Chromium, Playwright)
 
-- Recarga completa offline y reapertura de una nota visitada con su título
-  y contenido local, incluyendo navegación entre workspaces.
-- Cambio A/B y comprobación de aislamiento de metadata y contenido.
-- Logout offline y en dos pestañas; recarga con cookie aún presente, sin
-  restaurar el acceso hasta login explícito.
-- Denegaciones 401/403/404 y ausencia de resurrección offline posterior.
-- Reconexión con metadata cambiada, mismos IDs seleccionados y contenido
-  Yjs intacto, sin recrear el documento.
+Ejecutada con PostgreSQL en Docker (55432), backend en `:4001` y build de
+producción del frontend en `:4000`, con `@playwright/test` 1.63 y un contexto
+limpio por script (`e2e/acceptance/issue-030-*.mjs`, usando `context.setOffline`).
 
-También están pendientes las revisiones independientes de especificación y
-calidad. No se publican PRs ni se cierran #25/#26/#30 en esta entrega.
+| Escenario | Resultado |
+| --- | --- |
+| Service worker controla la portada tras la primera visita | OK |
+| Recarga completa offline: workspace y nota visibles, abrir "Nota A" restaura `texto persistido offline` | OK |
+| Logout offline bloquea la UI; recargar offline no restaura notas | OK |
+| Login explícito al volver online restaura las notas | OK |
+| Cambio de cuenta A/B: B no ve "Nota A", ni online ni offline tras recargar | OK |
+| Reconexión con título cambiado en servidor (PATCH 200): el nuevo título aparece y el contenido Yjs queda intacto | OK |
+| Logout en una pestaña bloquea la otra; recargar esa pestaña sigue bloqueada | OK |
+| Denegaciones 401/403/404 sin resurrección offline | Cubierto por tests node:test y `workspace-revocation.cli.txt`; sin script nuevo |
+
+No hubo `pageerror` en la ejecución. Los scripts no son una suite automática:
+#31 y #55 los convertirán en tests de Playwright reproducibles.
+
+No se publican PRs ni se cierran #25/#26/#30 en esta entrega.
 
 ## Límites
 

@@ -305,7 +305,7 @@ está pendiente; abrir notas visitadas tras recargar y verificar logout depende
 de #30. #26 sigue abierta: no se afirma aceptación offline completa. Evidencia,
 política del caché y límites en [docs/issues/026-app-shell.md](docs/issues/026-app-shell.md).
 
-## Navegación offline por usuario (#30, aceptación pendiente)
+## Navegación offline por usuario (#30)
 
 La portada recupera identidad local y metadata por usuario únicamente ante
 fallos de transporte. IndexedDB conserva títulos, workspaces y visitas;
@@ -321,9 +321,8 @@ Un fallo de persistencia/purga bloquea conservadoramente el acceso local para
 no reutilizar metadata potencialmente revocada. El caché no es cifrado ni
 borrado seguro del perfil compartido.
 
-Verificado automáticamente: frontend 52/52 tests, backend 54/54, lint,
-typecheck y build de ambos; postbuild y typecheck posterior del frontend.
-La UI nueva no se ejercitó en navegador en esta implementación. La aceptación
-de recarga offline, dos pestañas/logout, cambio de cuenta y reconexión queda
-para el controlador; #25/#26/#30 siguen abiertas. Evidencia en
+Verificado con tests automáticos (frontend 57/57, lint, typecheck, build) y con
+aceptación en Chromium: recarga offline con contenido restaurado, logout
+offline y en dos pestañas, aislamiento entre cuentas y reconexión con metadata
+cambiada. #25/#26/#30 siguen abiertas hasta que las cierres. Evidencia en
 [docs/issues/030-offline-navigation.md](docs/issues/030-offline-navigation.md).
