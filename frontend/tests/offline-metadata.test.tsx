@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import 'fake-indexeddb/auto';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { establishOfflineIdentity, invalidateOfflineIdentity } from '../src/lib/offline-session';
-import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../src/lib/offline-metadata';
+import { clearUserMetadata, discardOrphan, markVisited, readNotes, readOrphans, retireNote, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../src/lib/offline-metadata';
 const storage = new Map<string, string>();
 Object.defineProperty(globalThis, 'window', { value: { localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value) } } });
 const workspace = { id: 'w', name: 'Workspace', updatedAt: '2026-01-01' } as WorkspaceSummary;
@@ -104,4 +104,40 @@ test('aborted reads reject instead of publishing request results', async () => {
   };
   try { await assert.rejects(readWorkspaces('a')); }
   finally { IDBObjectStore.prototype.get = original; }
+});
+test('a visited note that disappears from the server list becomes a recoverable orphan, not a listed note', async () => {
+  const identity = establishOfflineIdentity({ id: 'orphaned', email: 'orphaned@example.test' });
+  const other = { ...note, id: 'other' } as NoteSummary;
+  await writeNotes(identity, 'w', [note, other]);
+  await markVisited(identity, note);
+  await markVisited(identity, other);
+  await writeNotes(identity, 'w', [other]);
+  assert.deepEqual(await readNotes(identity.user.id, 'w'), [other]);
+  assert.deepEqual(await readVisitedNoteIds(identity.user.id), ['other']);
+  assert.deepEqual(await readOrphans(identity.user.id, 'w'), [note]);
+  assert.deepEqual(await readOrphans(identity.user.id, 'elsewhere'), []);
+  // A later listing without it keeps the orphan until the author discards it.
+  await writeNotes(identity, 'w', [other]);
+  assert.deepEqual(await readOrphans(identity.user.id, 'w'), [note]);
+  await discardOrphan(identity.user.id, note);
+  assert.deepEqual(await readOrphans(identity.user.id, 'w'), []);
+});
+test('retiring an open note removes it from the cached list and keeps it recoverable', async () => {
+  const identity = establishOfflineIdentity({ id: 'retired', email: 'retired@example.test' });
+  await writeNotes(identity, 'w', [note]);
+  await markVisited(identity, note);
+  await retireNote(identity, note);
+  assert.deepEqual(await readNotes(identity.user.id, 'w'), []);
+  assert.deepEqual(await readVisitedNoteIds(identity.user.id), []);
+  assert.deepEqual(await readOrphans(identity.user.id, 'w'), [note]);
+  await clearUserMetadata(identity.user.id);
+  assert.deepEqual(await readOrphans(identity.user.id, 'w'), []);
+});
+test('orphans are isolated per user', async () => {
+  const a = establishOfflineIdentity({ id: 'iso-a', email: 'a@example.test' });
+  await writeNotes(a, 'w', [note]);
+  await markVisited(a, note);
+  await writeNotes(a, 'w', []);
+  assert.deepEqual(await readOrphans('iso-a', 'w'), [note]);
+  assert.deepEqual(await readOrphans('iso-b', 'w'), []);
 });

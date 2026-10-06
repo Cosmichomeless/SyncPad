@@ -4,7 +4,7 @@ import test from 'node:test';
 import { IDBDatabase, IDBObjectStore } from 'fake-indexeddb';
 import * as Y from 'yjs';
 import { createEditorDocument } from '../src/lib/note-document';
-import { noteStorageKey, persistNote } from '../src/lib/note-persistence';
+import { deleteLocalNote, noteStorageKey, persistNote } from '../src/lib/note-persistence';
 
 test('restores a visited note without network', async () => {
   const first = createEditorDocument();
@@ -292,4 +292,12 @@ test('reads the existing y-indexeddb version-one updates schema', async () => {
   });
   document.doc.destroy();
   assert.equal(await restore('legacy-user', 'legacy-note'), 'Legacy content');
+});
+
+test('discarding a deleted note erases only that note\'s local copy', async () => {
+  await save('discard-user', 'gone-note', 'texto sin sincronizar');
+  await save('discard-user', 'kept-note', 'otra nota');
+  await deleteLocalNote('discard-user', 'gone-note');
+  assert.equal(await restore('discard-user', 'gone-note'), '');
+  assert.equal(await restore('discard-user', 'kept-note'), 'otra nota');
 });

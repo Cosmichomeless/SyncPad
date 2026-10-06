@@ -5,10 +5,10 @@ import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyLocalTextEdit, createEditorDocument, type EditorDocument } from '../lib/note-document';
 import { createNoteSync, type NoteSyncHandle, type SyncState } from '../lib/note-sync';
 import NoteSyncStatus from './note-sync-status';
-import { persistNote } from '../lib/note-persistence';
+import { deleteLocalNote, persistNote } from '../lib/note-persistence';
 import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
-import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
+import { clearUserMetadata, discardOrphan, markVisited, readNotes, readOrphans, readVisitedNoteIds, readWorkspaces, removeWorkspace, retireNote, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
 
@@ -30,6 +30,9 @@ export default function Home() {
   const [syncError, setSyncError] = useState('');
   const [networkOnline, setNetworkOnline] = useState(true);
   const [syncState, setSyncState] = useState<SyncState>('offline');
+  const [deleted, setDeleted] = useState(false);
+  const [orphans, setOrphans] = useState<NoteSummary[]>([]);
+  const deletedIdsRef = useRef(new Set<string>());
   const documentRef = useRef<EditorDocument | null>(null);
   const syncRef = useRef<NoteSyncHandle | null>(null);
   const identityRef = useRef<OfflineIdentity | null>(null);
@@ -46,6 +49,7 @@ export default function Home() {
     setPending(false);
     setSyncError('');
     setSyncState('offline');
+    setDeleted(note ? deletedIdsRef.current.has(note.id) : false);
     updateSelectedNote(note);
   }, []);
 
@@ -87,12 +91,27 @@ export default function Home() {
     setError(cause instanceof Error ? `Almacenamiento local: ${cause.message}. Vuelve a entrar para continuar.` : 'No se pudo guardar la navegación local. Vuelve a entrar para continuar.');
   }, [clearPrivateUI]);
 
+  /**
+   * The note no longer exists on the server. Stop syncing, keep the on-device copy open read-only
+   * and remember it as recoverable; nothing here ever sends it back to the server.
+   */
+  const markNoteDeleted = useCallback(async (identity: OfflineIdentity, note: NoteSummary) => {
+    if (!isCurrentIdentity(identity)) return;
+    deletedIdsRef.current.add(note.id);
+    syncRef.current?.destroy(); syncRef.current = null;
+    setNotes(current => current.filter(row => row.id !== note.id));
+    if (noteRef.current?.id === note.id) { setDeleted(true); setEditable(false); setSyncError(''); setSyncState('offline'); }
+    await retireNote(identity, note).catch(cause => cacheFailure(cause, identity));
+    if (!isCurrentIdentity(identity) || workspaceRef.current?.id !== note.workspaceId) return;
+    setOrphans(await readOrphans(identity.user.id, note.workspaceId).catch(() => [] as NoteSummary[]));
+  }, [cacheFailure]);
+
   const selectWorkspace = useCallback(async (workspace: WorkspaceSummary, preserve = false) => {
     const identity = identityRef.current;
     if (!identity || !isCurrentIdentity(identity)) return;
     const selection = ++navigationRef.current;
     workspaceRef.current = workspace; setSelectedWorkspace(workspace);
-    if (!preserve) { setSelectedNote(null); setNotes([]); }
+    if (!preserve) { setSelectedNote(null); setNotes([]); setOrphans([]); }
     try {
       let rows: NoteSummary[];
       try {
@@ -107,9 +126,13 @@ export default function Home() {
       }
       if (!isCurrentIdentity(identity) || navigationRef.current !== selection) return;
       setNotes(rows);
-      if (noteRef.current) {
-        const selected = rows.find(row => row.id === noteRef.current?.id) ?? null;
-        if (!selected) setSelectedNote(null);
+      const recoverable = await readOrphans(identity.user.id, workspace.id).catch(() => [] as NoteSummary[]);
+      if (!isCurrentIdentity(identity) || navigationRef.current !== selection) return;
+      setOrphans(recoverable);
+      const open = noteRef.current;
+      if (open) {
+        const selected = rows.find(row => row.id === open.id) ?? null;
+        if (!selected) await markNoteDeleted(identity, open);
         else { noteRef.current = selected; updateSelectedNote(selected); }
       }
       return rows;
@@ -117,7 +140,7 @@ export default function Home() {
       if (isCurrentIdentity(identity) && shouldHandleRequestFailure(cause, navigationRef.current === selection))
         await handleFailure(cause, identity, workspace.id).catch(cause => cacheFailure(cause, identity));
     }
-  }, [setSelectedNote, handleFailure, cacheFailure]);
+  }, [setSelectedNote, handleFailure, cacheFailure, markNoteDeleted]);
 
   const loadWorkspaceList = useCallback(async (identity: OfflineIdentity) => {
     const selection = navigationRef.current;
@@ -273,6 +296,8 @@ export default function Home() {
       if (cancelled || !isCurrentIdentity(identity)) return;
       hydrated = true;
       setEditorText(document.content.toString());
+      // A deleted note is shown from its local copy only; it must never reconnect.
+      if (deletedIdsRef.current.has(noteId)) return;
       setEditable(true);
       const current = () => !cancelled && isCurrentIdentity(identity);
       sync = createNoteSync({
@@ -281,6 +306,15 @@ export default function Home() {
         onState: (state) => { if (current()) setSyncState(state); },
         onPending: (value) => { if (current()) setPending(value); },
         onError: (message) => { if (current()) setSyncError(message); },
+        onGone: () => { if (current()) void markNoteDeleted(identity, note); },
+        probe: async () => {
+          try {
+            const { notes: listed } = await request<{ notes: NoteSummary[] }>(`/workspaces/${note.workspaceId}/notes`);
+            return listed.some(row => row.id === noteId) ? 'present' : 'gone';
+          } catch (cause) {
+            return cause instanceof HttpError && [403, 404].includes(cause.status) ? 'gone' : 'unknown';
+          }
+        },
       });
       syncRef.current = sync;
     }).catch(() => {
@@ -297,7 +331,7 @@ export default function Home() {
         () => document.doc.destroy(),
       );
     };
-  }, [userId, noteId, cacheFailure]);
+  }, [userId, noteId, cacheFailure, markNoteDeleted]);
 
   useEffect(() => {
     const update = () => setNetworkOnline(navigator.onLine);
@@ -311,6 +345,37 @@ export default function Home() {
     setSyncError('');
     syncRef.current?.retry();
   }, []);
+
+  function openOrphan(note: NoteSummary) {
+    deletedIdsRef.current.add(note.id);
+    setSelectedNote(note);
+  }
+
+  function downloadLocalCopy() {
+    const note = noteRef.current;
+    if (!note) return;
+    const url = URL.createObjectURL(new Blob([editorText], { type: 'text/plain;charset=utf-8' }));
+    const link = window.document.createElement('a');
+    link.href = url;
+    link.download = `${note.title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-').trim() || 'nota'}.txt`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function discardLocalCopy() {
+    const identity = identityRef.current;
+    const note = noteRef.current;
+    if (!identity || !note || !isCurrentIdentity(identity)) return;
+    setSelectedNote(null);
+    try {
+      await discardOrphan(identity.user.id, note);
+      setOrphans(current => current.filter(row => row.id !== note.id));
+      await deleteLocalNote(identity.user.id, note.id);
+      deletedIdsRef.current.delete(note.id);
+    } catch {
+      if (isCurrentIdentity(identity)) setError('No se pudo descartar la copia local');
+    }
+  }
 
   function editContent(value: string) {
     const identity = identityRef.current;
@@ -351,7 +416,7 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       <section className="workspace-grid">
         <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form></aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando</p><h3>{selectedNote.title}</h3></div><NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} /></div>{pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3>{selectedNote.title}</h3></div>{!deleted && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{!deleted && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable && !deleted} readOnly={deleted} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );

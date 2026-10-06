@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import * as Y from 'yjs';
 import { applyEditorUpdate, applyLocalTextEdit, createEditorDocument, encodeEditorState, type EditorDocument } from '../src/lib/note-document';
-import { createNoteSync, type SyncState } from '../src/lib/note-sync';
+import { createNoteSync, type NoteProbe, type SyncState } from '../src/lib/note-sync';
 
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
 const unb64 = (value: string) => new Uint8Array(Buffer.from(value, 'base64'));
@@ -23,7 +23,7 @@ class FakeSocket {
   sent: Sent[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event?: { code: number }) => void) | null = null;
   onerror: (() => void) | null = null;
   onSend: ((message: Sent) => void) | null = null;
   closedByClient = false;
@@ -41,7 +41,7 @@ class FakeSocket {
   }
   open() { this.readyState = 1; this.onopen?.(); }
   receive(message: object) { this.onmessage?.({ data: JSON.stringify(message) }); }
-  drop() { this.readyState = 3; this.onclose?.(); }
+  drop(code?: number) { this.readyState = 3; this.onclose?.(code === undefined ? undefined : { code }); }
 }
 
 /** A tiny in-memory server that speaks the real Yjs protocol with a real Y.Doc. */
@@ -67,12 +67,13 @@ class FakeServer {
   text() { return this.doc.getText('content').toString(); }
 }
 
-function harness(options: { server?: FakeServer; document?: EditorDocument; online?: boolean; timing?: { initialDelayMs?: number; maxDelayMs?: number; deadlineMs?: number } } = {}) {
+function harness(options: { server?: FakeServer; document?: EditorDocument; online?: boolean; probe?: () => Promise<NoteProbe>; timing?: { initialDelayMs?: number; maxDelayMs?: number; deadlineMs?: number } } = {}) {
   const document = options.document ?? createEditorDocument();
   const sockets: FakeSocket[] = [];
   const states: SyncState[] = [];
   const pending: boolean[] = [];
   const errors: string[] = [];
+  const gone: number[] = [];
   const listeners = new Map<string, Set<() => void>>();
   const events = {
     addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => { (listeners.get(type) ?? listeners.set(type, new Set()).get(type)!).add(listener as () => void); },
@@ -86,6 +87,8 @@ function harness(options: { server?: FakeServer; document?: EditorDocument; onli
     onState: (state) => states.push(state),
     onPending: (value) => pending.push(value),
     onError: (message) => errors.push(message),
+    onGone: () => gone.push(Date.now()),
+    probe: options.probe,
     online: () => network.online,
     events,
     timing: { initialDelayMs: 10, maxDelayMs: 40, deadlineMs: 80, ...options.timing },
@@ -97,7 +100,7 @@ function harness(options: { server?: FakeServer; document?: EditorDocument; onli
     },
   });
   const current = () => sockets[sockets.length - 1];
-  return { document, sync, sockets, states, pending, errors, emit, current, network, listeners, state: () => states[states.length - 1] };
+  return { document, sync, sockets, states, pending, errors, gone, emit, current, network, listeners, state: () => states[states.length - 1] };
 }
 
 function text(document: EditorDocument) { return document.content.toString(); }
@@ -389,5 +392,86 @@ test('an ack for an older upload never reports up-to-date while a newer edit is 
   server.holdAcks = false;
   server.releaseAcks();
   await until(() => h.state() === 'up-to-date', 'up-to-date');
+  h.sync.destroy();
+});
+
+test('a note-deleted error stops syncing for good and keeps the unsynced text', async () => {
+  const server = new FakeServer();
+  const h = harness({ server });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  applyLocalTextEdit(h.document, 'cambio que nunca llegara');
+  h.current().receive({ type: 'sync-error', code: 'note-deleted', retryable: false });
+  assert.equal(h.gone.length, 1);
+  assert.equal(h.state(), 'offline');
+  assert.equal(h.errors.length, 0, 'deletion is not reported as a generic sync failure');
+  assert.equal(text(h.document), 'cambio que nunca llegara');
+  const sockets = h.sockets.length;
+  h.sync.retry();
+  h.emit('online');
+  await sleep(60);
+  assert.equal(h.sockets.length, sockets, 'a deleted note is never reconnected');
+  assert.equal(h.gone.length, 1);
+  h.sync.destroy();
+});
+
+test('the 4404 close code is enough even if the error message was lost', async () => {
+  const h = harness({ server: new FakeServer() });
+  h.current().open();
+  h.current().drop(4404);
+  assert.equal(h.gone.length, 1);
+  await sleep(60);
+  assert.equal(h.sockets.length, 1);
+  h.sync.destroy();
+});
+
+test('a connection that never opens is probed, and a deleted note stops the retries', async () => {
+  let probes = 0;
+  const h = harness({ probe: async () => { probes++; return 'gone'; } });
+  applyLocalTextEdit(h.document, 'editado sin red');
+  h.current().drop();
+  await until(() => h.gone.length === 1, 'gone after probe');
+  assert.equal(probes, 1);
+  assert.equal(h.state(), 'offline');
+  assert.equal(text(h.document), 'editado sin red');
+  const sockets = h.sockets.length;
+  await sleep(80);
+  assert.equal(h.sockets.length, sockets, 'no reconnect after the note is known to be gone');
+  h.sync.destroy();
+});
+
+test('an unknown or failing probe keeps retrying instead of declaring the note gone', async () => {
+  const answers: (NoteProbe | Error)[] = ['unknown', new Error('network'), 'present'];
+  let probes = 0;
+  const h = harness({ probe: async () => { const answer = answers[probes++]; if (answer instanceof Error) throw answer; return answer; } });
+  for (let round = 0; round < 3; round++) {
+    const count = h.sockets.length;
+    h.current().drop();
+    await until(() => h.sockets.length === count + 1, `reconnect ${round + 1}`);
+  }
+  assert.equal(probes, 3);
+  assert.equal(h.gone.length, 0);
+  assert.equal(h.state(), 'reconnecting');
+  h.sync.destroy();
+});
+
+test('a drop after a successful open is a transport failure and is not probed', async () => {
+  let probes = 0;
+  const h = harness({ server: new FakeServer(), probe: async () => { probes++; return 'gone'; } });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  h.current().drop();
+  await until(() => h.sockets.length === 2, 'reconnect');
+  assert.equal(probes, 0);
+  assert.equal(h.gone.length, 0);
+  h.sync.destroy();
+});
+
+test('without a network the probe is not asked', async () => {
+  let probes = 0;
+  const h = harness({ online: false, probe: async () => { probes++; return 'gone'; } });
+  await sleep(40);
+  assert.equal(probes, 0);
+  assert.equal(h.gone.length, 0);
   h.sync.destroy();
 });

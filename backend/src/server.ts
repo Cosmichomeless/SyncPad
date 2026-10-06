@@ -78,7 +78,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       return;
     }
     if (options.auth && options.notes && ((req.url?.startsWith('/workspaces/') && req.url?.includes('/notes')) || req.url?.startsWith('/notes/'))) {
-      void handleNoteRequest(req, res, options.auth, options.notes).catch(() => {
+      void handleNoteRequest(req, res, options.auth, options.notes, (noteId) => retireRoom(noteId)).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
       return;
@@ -115,6 +115,19 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       loading.catch(() => { if (rooms.get(noteId) === loading) rooms.delete(noteId); });
     }
     return room;
+  };
+  /** Drops the in-memory room of a deleted note and tells its clients the deletion is final. */
+  const retireRoom = async (noteId: string) => {
+    const loading = rooms.get(noteId as NoteId);
+    rooms.delete(noteId as NoteId);
+    const room = await loading?.catch(() => undefined);
+    if (!room) return;
+    const payload = JSON.stringify({ type: 'sync-error', code: 'note-deleted', retryable: false } satisfies ServerSyncMessage);
+    for (const client of room.clients.keys()) {
+      if (client.readyState === client.OPEN) client.send(payload);
+      client.close(4404, 'Note deleted');
+    }
+    room.clients.clear();
   };
   let closing: Promise<void> | undefined;
   server.on('connection', (socket) => {

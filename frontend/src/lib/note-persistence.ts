@@ -86,3 +86,13 @@ export function persistNote(userId: string, noteId: string, doc: Y.Doc, onError:
     },
   };
 }
+
+
+/** Erases the on-device copy of a note. Resolves once every connection to it has closed. */
+export function deleteLocalNote(userId: string, noteId: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(noteStorageKey(userId, noteId));
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}

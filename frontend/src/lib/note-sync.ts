@@ -3,6 +3,8 @@ import { applyEditorUpdate, encodeEditorStateSince, encodeEditorStateVector, LOC
 
 export type SyncState = 'offline' | 'reconnecting' | 'syncing' | 'up-to-date';
 export type NoteSyncHandle = { retry(): void; destroy(): void };
+/** What an out-of-band check says about the note: still there, deleted/unreachable, or no answer. */
+export type NoteProbe = 'present' | 'gone' | 'unknown';
 
 type Timing = { initialDelayMs: number; maxDelayMs: number; deadlineMs: number };
 
@@ -13,6 +15,16 @@ export type NoteSyncOptions = {
   /** True while local edits exist that the server has not acknowledged. */
   onPending?(pending: boolean): void;
   onError(message: string): void;
+  /**
+   * Called once when the note no longer exists on the server. Syncing stops for good and the
+   * local document is left untouched so the caller can offer recovery.
+   */
+  onGone?(): void;
+  /**
+   * Asked after a connection attempt failed before opening, because a WebSocket upgrade
+   * cannot tell "deleted" from "offline". Must resolve 'unknown' when it cannot decide.
+   */
+  probe?(): Promise<NoteProbe>;
   online?: () => boolean;
   events?: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
   socketFactory?: (url: string) => WebSocket;
@@ -21,6 +33,7 @@ export type NoteSyncOptions = {
 
 const DEFAULT_TIMING: Timing = { initialDelayMs: 500, maxDelayMs: 10_000, deadlineMs: 10_000 };
 const SOCKET_OPEN = 1;
+const NOTE_DELETED_CLOSE_CODE = 4404;
 
 function toBase64(bytes: Uint8Array) {
   let binary = '';
@@ -43,7 +56,7 @@ function fromBase64(value: string) {
  * caller and survive every reconnect and destroy().
  */
 export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
-  const { document, url, onState, onPending, onError } = options;
+  const { document, url, onState, onPending, onError, onGone, probe } = options;
   const timing = { ...DEFAULT_TIMING, ...options.timing };
   const online = options.online ?? (() => navigator.onLine);
   const events = options.events ?? window;
@@ -51,6 +64,8 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
 
   let destroyed = false;
   let failed = false;
+  let gone = false;
+  let probing = false;
   let socket: WebSocket | null = null;
   let handshakeId: string | null = null;
   let baseVector: Uint8Array | null = null;
@@ -71,7 +86,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   function publish() {
     if (destroyed) return;
     let state: SyncState;
-    if (failed) state = 'offline';
+    if (failed || gone) state = 'offline';
     else if (!isOpen()) state = online() ? 'reconnecting' : 'offline';
     else if (!reconciled || upload || localRevision !== acknowledged) state = 'syncing';
     else state = 'up-to-date';
@@ -113,7 +128,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   }
 
   function scheduleReconnect() {
-    if (destroyed || failed) return;
+    if (destroyed || failed || gone) return;
     publish();
     if (!online() || retryTimer !== undefined) return;
     const delay = Math.min(timing.maxDelayMs, timing.initialDelayMs * 2 ** attempt);
@@ -124,6 +139,21 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   function failTransport() {
     teardown();
     scheduleReconnect();
+  }
+
+  function markGone() {
+    if (gone || destroyed) return;
+    gone = true;
+    teardown();
+    clearRetry();
+    publish();
+    onGone?.();
+  }
+
+  function probeNote() {
+    if (!probe || probing || gone || destroyed || !online()) return;
+    probing = true;
+    void probe().then((result) => { if (result === 'gone') markGone(); }, () => {}).finally(() => { probing = false; });
   }
 
   function failPermanently(message: string) {
@@ -188,6 +218,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
         return;
       }
       case 'sync-error': {
+        if (message.code === 'note-deleted') { markGone(); return; }
         if (message.requestId !== undefined && message.requestId !== handshakeId && message.requestId !== upload?.id) return;
         if (message.retryable) failTransport();
         else failPermanently('El servidor rechazó la sincronización. Tus cambios siguen guardados en este dispositivo.');
@@ -197,14 +228,16 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   }
 
   function connect() {
-    if (destroyed) return;
+    if (destroyed || gone) return;
     clearRetry();
     if (!online()) { publish(); return; }
     const connection = openSocket(url);
+    let opened = false;
     socket = connection;
     const live = () => !destroyed && socket === connection;
     connection.onopen = () => {
       if (!live()) return;
+      opened = true;
       handshakeId = nextId('sync');
       send({ type: 'sync-request', requestId: handshakeId, stateVector: toBase64(encodeEditorStateVector(document.doc)) });
       armDeadline();
@@ -213,11 +246,13 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
     connection.onmessage = (event) => {
       if (live()) handleMessage(event.data as string);
     };
-    connection.onclose = () => {
+    connection.onclose = (event) => {
       if (!live()) return;
       socket = null;
       resetSession();
+      if (event?.code === NOTE_DELETED_CLOSE_CODE) { markGone(); return; }
       scheduleReconnect();
+      if (!opened) probeNote();
     };
     connection.onerror = () => { /* a close event always follows */ };
     publish();
@@ -248,7 +283,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
 
   return {
     retry() {
-      if (destroyed) return;
+      if (destroyed || gone) return;
       failed = false;
       attempt = 0;
       teardown();

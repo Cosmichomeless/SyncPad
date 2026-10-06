@@ -217,6 +217,25 @@ button:disabled {
   padding: 0.5rem 0.75rem;
 }
 
+.deleted-note {
+  background: #fdecec;
+  border-left: 3px solid #a33131;
+  border-radius: 0.2rem;
+  color: #5c1a1a;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.deleted-note p {
+  margin: 0 0 0.5rem;
+}
+
+.orphan-list {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
 .editor-preview textarea:disabled {
   opacity: 0.6;
 }

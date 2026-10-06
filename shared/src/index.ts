@@ -48,7 +48,8 @@ export type ClientSyncMessage =
   | { type: 'update'; requestId?: string; update: string }
   | { type: 'awareness' };
 
-export type SyncErrorCode = 'persistence-unavailable' | 'invalid-message';
+/** `note-deleted` is final: the note no longer exists on the server and must not be recreated by a client. */
+export type SyncErrorCode = 'persistence-unavailable' | 'invalid-message' | 'note-deleted';
 
 /** Messages the server sends. `ack` is emitted only after the update is durably appended. */
 export type ServerSyncMessage =
