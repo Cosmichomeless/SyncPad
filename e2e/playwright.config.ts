@@ -9,6 +9,7 @@ const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://syncpad:syncpad@127
 // on the ports below are reused, so a locally running stack is not restarted.
 export default defineConfig({
   testDir: './tests',
+  globalTeardown: './global-teardown.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
