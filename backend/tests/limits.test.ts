@@ -8,15 +8,16 @@ test('limits default when the environment is silent', () => {
 });
 
 test('limits can be overridden from the environment', () => {
-  const limits = loadLimits({ SYNC_MAX_NOTE_CHARS: '1000', SYNC_MAX_CLIENTS_PER_ROOM: '3', SYNC_HEARTBEAT_MS: '0' });
+  const limits = loadLimits({ SYNC_MAX_NOTE_CHARS: '1000', SYNC_MAX_CLIENTS_PER_ROOM: '3', SYNC_HEARTBEAT_MS: '0', SYNC_PERMISSION_RECHECK_MS: '2000' });
   assert.equal(limits.maxNoteChars, 1000);
   assert.equal(limits.maxClientsPerRoom, 3);
   assert.equal(limits.heartbeatMs, 0);
+  assert.equal(limits.permissionRecheckMs, 2000);
   assert.equal(limits.messagesPerSecond, DEFAULT_LIMITS.messagesPerSecond);
 });
 
 test('invalid limits fail startup naming the variable', () => {
-  for (const [name, value] of [['SYNC_MAX_NOTE_CHARS', '0'], ['SYNC_MAX_NOTE_CHARS', '-5'], ['SYNC_MAX_CLIENTS_PER_ROOM', 'many'], ['SYNC_MAX_MESSAGE_BYTES', '10'], ['SYNC_MESSAGE_BURST', '1.5']]) {
+  for (const [name, value] of [['SYNC_MAX_NOTE_CHARS', '0'], ['SYNC_MAX_NOTE_CHARS', '-5'], ['SYNC_MAX_CLIENTS_PER_ROOM', 'many'], ['SYNC_MAX_MESSAGE_BYTES', '10'], ['SYNC_MESSAGE_BURST', '1.5'], ['SYNC_PERMISSION_RECHECK_MS', '0']]) {
     assert.throws(() => loadLimits({ [name]: value }), new RegExp(name));
   }
 });

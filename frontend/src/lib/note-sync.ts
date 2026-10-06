@@ -274,6 +274,10 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
       case 'sync-error': {
         if (message.code === 'note-deleted') { markGone(); return; }
         if (message.code === 'incompatible-schema') { markIncompatible(); return; }
+        if (message.code === 'access-revoked') {
+          failPermanently('Ya no tienes acceso a esta nota. Tus cambios siguen guardados en este dispositivo.');
+          return;
+        }
         if (message.requestId !== undefined && message.requestId !== handshakeId && message.requestId !== upload?.id) return;
         if (message.retryable) failTransport();
         else failPermanently('El servidor rechazó la sincronización. Tus cambios siguen guardados en este dispositivo.');

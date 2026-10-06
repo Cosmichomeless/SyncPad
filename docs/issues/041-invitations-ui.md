@@ -65,8 +65,8 @@ conflicto llevan `{ error: { code, message } }` para que la interfaz los expliqu
 
 ## Límites
 
-- Quitar a un miembro revoca su acceso a las llamadas HTTP y a nuevas conexiones,
-  pero **no expulsa** los sockets WebSocket ya abiertos ni recomprueba permisos en
-  cada update: eso corresponde a #51.
+- Quitar a un miembro revoca su acceso a las llamadas HTTP y a nuevas conexiones.
+  Los sockets WebSocket ya abiertos se cortan al instante y los permisos se
+  recomprueban en cada conexión viva (ver [#51](051-ws-permissions.md)).
 - No se envían emails: el propietario comparte el enlace por el canal que quiera.
 - No hay todavía transferencia de propiedad ni cambio de rol.

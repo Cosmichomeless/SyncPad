@@ -14,6 +14,8 @@ export type SyncLimits = {
   maxNoteChars: number;
   /** Most simultaneous connections to one note. */
   maxClientsPerRoom: number;
+  /** How long a connection's session and note access are trusted before they are asked again. */
+  permissionRecheckMs: number;
 };
 
 export const DEFAULT_LIMITS: SyncLimits = {
@@ -25,6 +27,7 @@ export const DEFAULT_LIMITS: SyncLimits = {
   maxMessageBytes: 1024 * 1024,
   maxNoteChars: 500_000,
   maxClientsPerRoom: 50,
+  permissionRecheckMs: 5_000,
 };
 
 /** Which limit fired; logged so an operator can tell abuse from an undersized limit. */
@@ -42,6 +45,7 @@ const ENV_LIMITS: Record<keyof SyncLimits, { env: string; min: number }> = {
   maxMessageBytes: { env: 'SYNC_MAX_MESSAGE_BYTES', min: 1024 },
   maxNoteChars: { env: 'SYNC_MAX_NOTE_CHARS', min: 1 },
   maxClientsPerRoom: { env: 'SYNC_MAX_CLIENTS_PER_ROOM', min: 1 },
+  permissionRecheckMs: { env: 'SYNC_PERMISSION_RECHECK_MS', min: 1 },
 };
 
 /** Reads the limits from the environment; anything unset keeps its default and anything invalid fails startup. */

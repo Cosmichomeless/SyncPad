@@ -417,6 +417,22 @@ test('a note-deleted error stops syncing for good and keeps the unsynced text', 
   h.sync.destroy();
 });
 
+test('an access-revoked error stops syncing, says why and keeps the local text', async () => {
+  const h = harness({ server: new FakeServer() });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  applyLocalTextEdit(h.document, 'sin permiso ya');
+  h.current().receive({ type: 'sync-error', code: 'access-revoked', retryable: false });
+  assert.equal(h.errors.length, 1);
+  assert.match(h.errors[0], /Ya no tienes acceso/);
+  assert.equal(h.state(), 'offline');
+  assert.equal(text(h.document), 'sin permiso ya');
+  const sockets = h.sockets.length;
+  await sleep(100);
+  assert.equal(h.sockets.length, sockets, 'a revoked connection is not retried on its own');
+  h.sync.destroy();
+});
+
 test('the 4404 close code is enough even if the error message was lost', async () => {
   const h = harness({ server: new FakeServer() });
   h.current().open();

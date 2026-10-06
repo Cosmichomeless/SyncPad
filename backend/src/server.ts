@@ -6,7 +6,7 @@ import { WebSocketServer } from 'ws';
 import type WebSocket from 'ws';
 import type { AwarenessCursor, AwarenessUser, ClientSyncMessage, HealthResponse, ServerSyncMessage } from '@syncpad/shared';
 import { applyNoteUpdate, assertValidNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince, encodeNoteStateVector, isNoteSchemaError } from '@syncpad/shared';
-import type { NoteId } from '@syncpad/shared';
+import type { NoteId, UserId } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
 import type { AuthUser } from './auth.js';
@@ -37,6 +37,10 @@ type NoteRoom = {
   /** Updates persisted through this room since the store was last asked for a snapshot. */
   sinceSnapshotCheck: number;
 };
+
+type RevokeReason = 'recheck' | 'member-removed' | 'logout';
+/** One authenticated connection, with what is needed to ask again whether it may still be there. */
+type Guard = { userId: UserId; token: string; noteId: NoteId; checkedAt: number; revoke(reason: RevokeReason): void };
 
 function enqueue(room: NoteRoom, task: () => Promise<void>) {
   const run = room.queue.then(task);
@@ -116,7 +120,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         corsOrigin: 'http://127.0.0.1:3000',
         cookieSecure: false,
         cookieSameSite: 'Lax',
-      }).catch(() => {
+      }, (token) => revalidate((guard) => guard.token === token, 'logout')).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
       return;
@@ -128,7 +132,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       return;
     }
     if (options.auth && options.workspaces && (req.url?.startsWith('/workspaces') || req.url?.startsWith('/invitations'))) {
-      void handleWorkspaceRequest(req, res, options.auth, options.workspaces).catch(() => {
+      void handleWorkspaceRequest(req, res, options.auth, options.workspaces, (memberId) => revalidate((guard) => guard.userId === memberId, 'member-removed')).catch(() => {
         if (!res.headersSent) res.writeHead(500).end();
       });
       return;
@@ -196,6 +200,27 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     }
     room.clients.clear();
   };
+  /** Live connections whose right to be there is rechecked: on a timer, per message, and when HTTP revokes something. */
+  const guards = new Set<Guard>();
+  /** Is the session still the same user's, and does that user still belong to the note's workspace? */
+  const stillAllowed = async (guard: Guard) => {
+    const user = await options.auth!.getUserBySession(guard.token);
+    const allowed = user?.id === guard.userId && (await options.notes!.canAccess(guard.userId, guard.noteId));
+    guard.checkedAt = Date.now();
+    return allowed;
+  };
+  const revalidate = (matches: (guard: Guard) => boolean, reason: RevokeReason) => {
+    for (const guard of [...guards]) {
+      if (!matches(guard)) continue;
+      // An error here proves nothing: the next message or sweep asks again.
+      void stillAllowed(guard).then((allowed) => { if (!allowed) guard.revoke(reason); }, () => {});
+    }
+  };
+  const permissionSweep = setInterval(() => {
+    const cutoff = Date.now() - limits.permissionRecheckMs;
+    revalidate((guard) => guard.checkedAt <= cutoff, 'recheck');
+  }, limits.permissionRecheckMs);
+  permissionSweep.unref();
   let closing: Promise<void> | undefined;
   /** A socket that has not answered the last ping is dead (or hung) and is dropped, freeing its room slot. */
   const liveness = new WeakMap<WebSocket, boolean>();
@@ -222,6 +247,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         return;
       }
       let roomUser: AuthUser | null = null;
+      let sessionToken = '';
       if (options.auth && options.notes) {
         const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
         const noteId = url.searchParams.get('noteId');
@@ -230,7 +256,8 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           rejectUpgrade(socket, 401);
           return;
         }
-        roomUser = await options.auth.getUserBySession(decodeURIComponent(token));
+        sessionToken = decodeURIComponent(token);
+        roomUser = await options.auth.getUserBySession(sessionToken);
         if (!roomUser) {
           rejectUpgrade(socket, 401);
           return;
@@ -253,7 +280,10 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         }
         const connectionId = randomUUID();
         const participant: AwarenessUser = { connectionId, userId: roomUser?.id ?? 'anonymous', email: roomUser?.email ?? 'anonymous' };
+        let revoked = false;
+        let joinedRoom: NoteRoom | undefined;
         const send = (message: ServerSyncMessage) => {
+          if (revoked) return;
           if (message.type === 'sync-error') {
             metrics.inc('syncpad_sync_errors_total', { code: message.code });
             logger.warn('sync error sent', { roomId: noteId, connectionId, code: message.code, retryable: message.retryable });
@@ -266,6 +296,26 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             if (peer.readyState === peer.OPEN) peer.send(JSON.stringify({ type: 'awareness', users, self: who.connectionId } satisfies ServerSyncMessage));
           }
         };
+        const guard: Guard = {
+          userId: roomUser!.id,
+          token: sessionToken,
+          noteId,
+          checkedAt: Date.now(),
+          revoke: (reason) => {
+            if (revoked) return;
+            revoked = true;
+            guards.delete(guard);
+            // Out of the room first and synchronously, so nothing more is broadcast to a socket that lost access.
+            if (joinedRoom?.clients.delete(client)) broadcastAwareness(joinedRoom);
+            metrics.inc('syncpad_access_revoked_total', { reason });
+            logger.warn('ws access revoked', { roomId: noteId, connectionId, userId: participant.userId, reason });
+            if (client.readyState === client.OPEN) {
+              client.send(JSON.stringify({ type: 'sync-error', code: 'access-revoked', retryable: false } satisfies ServerSyncMessage));
+              client.close(4403, 'Access revoked');
+            }
+          },
+        };
+        guards.add(guard);
         const snapshot = (room: NoteRoom, requestId?: string, since?: Uint8Array): ServerSyncMessage => ({
           type: 'sync',
           ...(requestId ? { requestId } : {}),
@@ -273,6 +323,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           stateVector: encode(encodeNoteStateVector(room.document.doc)),
         });
         const persistUpdate = async (room: NoteRoom, update: Uint8Array, encoded: string, requestId?: string) => {
+          if (revoked) return; // queued before access was lost: neither stored nor broadcast
           const started = performance.now();
           const { contentLength } = assertValidNoteUpdate(room.document.doc, update);
           // Only growth is refused, so a note already over a lowered limit can still be shortened.
@@ -305,6 +356,22 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         };
         const awarenessAllowance = createRateLimiter(limits.awarenessPerSecond, limits.awarenessPerSecond * 2);
         const handle = async (room: NoteRoom, raw: WebSocket.RawData) => {
+          if (revoked) return;
+          if (Date.now() - guard.checkedAt >= limits.permissionRecheckMs) {
+            let allowed: boolean;
+            try {
+              allowed = await stillAllowed(guard);
+            } catch {
+              // Access that cannot be proven is not assumed: nothing is applied and the client retries.
+              send({ type: 'sync-error', code: 'persistence-unavailable', retryable: true });
+              client.close(1011, 'Access check unavailable');
+              return;
+            }
+            if (!allowed) {
+              guard.revoke('recheck');
+              return;
+            }
+          }
           let requestId: string | undefined;
           try {
             const message = JSON.parse(raw.toString()) as ClientSyncMessage;
@@ -338,7 +405,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         let joinedAt: number | undefined;
         // Listeners are attached before the room loads so an eager handshake is queued, not dropped.
         let ready: Promise<NoteRoom | undefined> = getRoom(noteId).then(async (room) => {
-          if (closed) return undefined;
+          if (closed || revoked) return undefined;
           if (room.clients.size >= limits.maxClientsPerRoom) {
             onLimit({ limit: 'room-full', noteId, max: limits.maxClientsPerRoom });
             send({ type: 'sync-error', code: 'room-full', retryable: true });
@@ -346,6 +413,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             return undefined;
           }
           room.clients.set(client, participant);
+          joinedRoom = room;
           joinedAt = Date.now();
           metrics.inc('syncpad_connections_total');
           const lostAt = recentDisconnects.get(`${noteId}:${participant.userId}`);
@@ -384,6 +452,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         });
         client.once('close', (code) => {
           closed = true;
+          guards.delete(guard);
           metrics.inc('syncpad_connection_closes_total', { code });
           if (joinedAt !== undefined) {
             const now = Date.now();
@@ -402,6 +471,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
   });
   function close(): Promise<void> {
     clearInterval(heartbeat);
+    clearInterval(permissionSweep);
     closing ??= new Promise<void>((resolve, reject) => {
       const deadline = setTimeout(() => {
         for (const client of wss.clients) client.terminate();

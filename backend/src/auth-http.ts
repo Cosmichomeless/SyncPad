@@ -50,7 +50,14 @@ function userResponse(user: { id: string; email: string }) {
   return { user };
 }
 
-export async function handleAuthRequest(request: IncomingMessage, response: ServerResponse, auth: AuthService, security: SecurityConfig) {
+export async function handleAuthRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  auth: AuthService,
+  security: SecurityConfig,
+  /** Told which session token just ended, so live connections that hold it can be cut. */
+  onSessionEnded?: (token: string) => void,
+) {
   const path = request.url?.split('?')[0];
   if (!path?.startsWith('/auth/')) return false;
 
@@ -121,7 +128,10 @@ export async function handleAuthRequest(request: IncomingMessage, response: Serv
       return true;
     }
     const token = parseCookies(request.headers.cookie).get(SESSION_COOKIE);
-    if (token) await auth.invalidateSession(token);
+    if (token) {
+      await auth.invalidateSession(token);
+      onSessionEnded?.(token);
+    }
     response.writeHead(204, { 'set-cookie': clearedSessionCookie(security), 'cache-control': 'no-store' });
     response.end();
     return true;

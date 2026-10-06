@@ -30,6 +30,8 @@ export async function handleWorkspaceRequest(
   response: ServerResponse,
   auth: AuthService,
   workspaces: WorkspaceService,
+  /** Told which user just lost their membership, so their live connections can be rechecked. */
+  onMemberRemoved?: (memberId: string) => void,
 ) {
   const path = request.url?.split('?')[0] ?? '';
   if (!path.startsWith('/workspaces') && !path.startsWith('/invitations')) return false;
@@ -90,6 +92,7 @@ export async function handleWorkspaceRequest(
     try {
       if (!isUuid(parts[3])) throw new Error('Only an OWNER can remove this member');
       await workspaces.removeMember(parts[1], user.id, parts[3] as never);
+      onMemberRemoved?.(parts[3]);
       response.writeHead(204).end();
     } catch (error) {
       sendJson(response, 403, { error: { code: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Member cannot be removed' } });
