@@ -1,11 +1,5 @@
+import { SYNC_LABELS as LABELS } from '../lib/note-navigation';
 import type { SyncState } from '../lib/note-sync';
-
-const LABELS: Record<SyncState, string> = {
-  offline: 'Sin conexión',
-  reconnecting: 'Reconectando',
-  syncing: 'Sincronizando',
-  'up-to-date': 'Al día',
-};
 
 type NoteSyncStatusProps = {
   state: SyncState;

@@ -1,10 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { AwarenessUser, NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyLocalTextEdit, createEditorDocument, NoteSchemaError, redoLocalEdit, undoLocalEdit, type EditorDocument } from '../lib/note-document';
 import { createNoteSync, type NoteSyncHandle, type SyncState } from '../lib/note-sync';
 import NoteSyncStatus from './note-sync-status';
+import { createDrainRegistry } from '../lib/note-drain';
+import { noteStatusLabel } from '../lib/note-navigation';
 import PresenceBar from './presence-bar';
 import MembersPanel from './members-panel';
 import RichPreview from './rich-preview';
@@ -49,6 +51,9 @@ export default function Home() {
   // 'remote': the server speaks a newer schema; 'local': the copy on this device was written by a newer editor.
   const [incompatible, setIncompatible] = useState<'remote' | 'local' | null>(null);
   const [orphans, setOrphans] = useState<NoteSummary[]>([]);
+  // Notes left behind that are still uploading edits the server has not acknowledged yet.
+  const [draining, setDraining] = useState<string[]>([]);
+  const [drains] = useState(() => createDrainRegistry(setDraining));
   const deletedIdsRef = useRef(new Set<string>());
   const documentRef = useRef<EditorDocument | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -83,9 +88,10 @@ export default function Home() {
     navigationRef.current++; authRequestRef.current++; workspaceRequestRef.current++;
     syncRef.current?.destroy(); syncRef.current = null;
     documentRef.current = null;
+    drains.clear();
     setUser(null); setWorkspaces([]); setNotes([]); setSelectedWorkspace(null); setSelectedNote(null);
     setWorkspaceName(''); setNoteTitle(''); setPassword(''); setEmail('');
-  }, [setSelectedNote]);
+  }, [setSelectedNote, drains]);
 
   const handleFailure = useCallback(async (cause: unknown, identity: OfflineIdentity, workspaceId?: string) => {
     if (!isCurrentIdentity(identity)) return;
@@ -342,6 +348,7 @@ export default function Home() {
 
   const userId = user?.id;
   const noteId = selectedNote?.id;
+  const unsentIds = useMemo(() => new Set([...draining, ...(pending && noteId ? [noteId] : [])]), [draining, pending, noteId]);
   useEffect(() => {
     const identity = identityRef.current;
     const note = noteRef.current;
@@ -353,6 +360,10 @@ export default function Home() {
       if (!cancelled && isCurrentIdentity(identity)) setError('No se pudo guardar en el almacenamiento local');
     });
     let sync: NoteSyncHandle | null = null;
+    let unacknowledged = false;
+    let released = false;
+    let terminal = false;
+    let settle: (() => void) | null = null;
     documentRef.current = document;
     const observeContent = () => {
       if (!hydrated || cancelled || !isCurrentIdentity(identity)) return;
@@ -377,16 +388,20 @@ export default function Home() {
         document,
         url: `${WS_URL}?noteId=${noteId}`,
         onState: (state) => { if (current()) setSyncState(state); },
-        onPending: (value) => { if (current()) setPending(value); },
-        onError: (message) => { if (current()) setSyncError(message); },
-        onGone: () => { if (current()) void markNoteDeleted(identity, note); },
+        onPending: (value) => {
+          unacknowledged = value;
+          if (current()) setPending(value);
+          else if (released && !value) settle?.();
+        },
+        onError: (message) => { terminal = true; if (current()) setSyncError(message); else if (released) settle?.(); },
+        onGone: () => { terminal = true; if (current()) void markNoteDeleted(identity, note); else if (released) settle?.(); },
         onAwareness: (users, self) => {
           if (!current()) return;
           awarenessRef.current = { users, self };
           setParticipants(groupParticipants(users, self));
           setSelections(remoteSelections(document.content, users, self));
         },
-        onIncompatible: () => { if (current()) { setIncompatible('remote'); setEditable(false); setSyncError(''); } },
+        onIncompatible: () => { terminal = true; if (current()) { setIncompatible('remote'); setEditable(false); setSyncError(''); } else if (released) settle?.(); },
         probe: async () => {
           try {
             const { notes: listed } = await request<{ notes: NoteSummary[] }>(`/workspaces/${note.workspaceId}/notes`);
@@ -406,15 +421,33 @@ export default function Home() {
       cancelled = true;
       clearTimeout(cursorTimerRef.current);
       document.content.unobserve(observeContent);
-      sync?.destroy();
       if (syncRef.current === sync) syncRef.current = null;
       if (documentRef.current === document) documentRef.current = null;
-      void persistence.destroy().then(
-        () => document.doc.destroy(),
-        () => document.doc.destroy(),
-      );
+      const finalize = () => {
+        sync?.destroy();
+        void persistence.destroy().then(
+          () => document.doc.destroy(),
+          () => document.doc.destroy(),
+        );
+      };
+      // Leaving a note with edits the server has not acknowledged lets its session finish uploading.
+      if (sync && unacknowledged && !terminal) {
+        released = true;
+        settle = drains.hold(noteId, finalize);
+      } else {
+        finalize();
+      }
     };
-  }, [userId, noteId, cacheFailure, markNoteDeleted]);
+  }, [userId, noteId, cacheFailure, markNoteDeleted, drains]);
+
+  useEffect(() => {
+    return () => drains.clear();
+  }, [drains]);
+
+  const activeTitle = selectedNote?.title;
+  useEffect(() => {
+    window.document.title = activeTitle ? `${activeTitle} · SyncPad` : 'SyncPad';
+  }, [activeTitle]);
 
   useEffect(() => {
     const update = () => setNetworkOnline(navigator.onLine);
@@ -556,8 +589,8 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       {invite && <div className="invite-banner" role="region" aria-label="Invitación recibida"><p><strong>Has recibido una invitación a un workspace.</strong> Solo funciona con la cuenta del email invitado y se puede usar una vez.</p><div className="actions"><button type="button" disabled={busy} onClick={() => void acceptInvite()}>Aceptar invitación</button><button type="button" className="quiet" onClick={dismissInvite}>Descartar</button></div>{inviteError && <p className="error" role="alert">{inviteError}</p>}</div>}
       <section className="workspace-grid">
-        <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form>{selectedWorkspace && <MembersPanel key={selectedWorkspace.id} workspace={selectedWorkspace} currentUserId={user.id} />}</aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3>{selectedNote.title}</h3></div>{!deleted && !incompatible && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{incompatible && <div className="incompatible-note" role="alert"><p><strong>Esta nota usa un formato más nuevo que esta versión de SyncPad.</strong> {incompatible === 'local' ? 'La copia de este dispositivo no se ha abierto ni modificado.' : 'Se ha dejado de sincronizar y no se ha aplicado nada del servidor.'} Recarga la aplicación para actualizarla; no se ha perdido nada.{incompatible === 'remote' && pending && ' Tus últimos cambios siguen guardados solo en este dispositivo.'}</p>{incompatible === 'remote' && <div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button></div>}</div>}{!deleted && !incompatible && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}{!deleted && !incompatible && <PresenceBar participants={participants} selections={selections} />}{!deleted && !incompatible && <div className="format-toolbar" role="toolbar" aria-label="Formato" onMouseDown={(event) => { if ((event.target as HTMLElement).tagName !== 'INPUT') event.preventDefault(); }}><button type="button" disabled={!editable} onClick={() => formatSelection(toggleBold)} aria-label="Negrita"><strong>N</strong></button><button type="button" disabled={!editable} onClick={() => formatSelection((document, start, end) => toggleList(document, start, end))} aria-label="Lista">• Lista</button><button type="button" disabled={!editable} aria-expanded={linkOpen} onClick={() => setLinkOpen(open => !open)} aria-label="Enlace">Enlace</button><button type="button" disabled={!editable} onClick={() => formatSelection(removeLink)} aria-label="Quitar enlace">Quitar enlace</button></div>}{linkOpen && !deleted && !incompatible && <form className="link-form" onSubmit={(event) => { event.preventDefault(); submitLink(); }}><input aria-label="Dirección del enlace" type="url" placeholder="https://" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} /><button type="submit">Aplicar enlace</button></form>}{formatError && <p className="format-hint" role="status">{formatError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable && !deleted && !incompatible} readOnly={deleted || incompatible !== null} value={editorText} onChange={(event) => editContent(event.target.value)} onKeyDown={historyKey} onSelect={(event) => shareCursor(event.currentTarget)} onBlur={() => shareCursor(null)} ref={bindHistoryInput} placeholder="Escribe el contenido de la nota..." />{editorText && <RichPreview blocks={blocks} />}</article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} aria-current={selectedWorkspace?.id === workspace.id ? 'true' : undefined} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form>{selectedWorkspace && <MembersPanel key={selectedWorkspace.id} workspace={selectedWorkspace} currentUserId={user.id} />}</aside>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} aria-current={selectedNote?.id === note.id ? 'true' : undefined} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small className={unsentIds.has(note.id) ? 'note-unsent' : undefined}>{noteStatusLabel({ active: selectedNote?.id === note.id, syncState, unsent: unsentIds.has(note.id), deleted: deleted && selectedNote?.id === note.id, fallback: `Actualizada ${new Date(note.updatedAt).toLocaleDateString('es-ES')}` })}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} aria-current={selectedNote?.id === note.id ? 'true' : undefined} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3>{selectedNote.title}</h3></div>{!deleted && !incompatible && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{incompatible && <div className="incompatible-note" role="alert"><p><strong>Esta nota usa un formato más nuevo que esta versión de SyncPad.</strong> {incompatible === 'local' ? 'La copia de este dispositivo no se ha abierto ni modificado.' : 'Se ha dejado de sincronizar y no se ha aplicado nada del servidor.'} Recarga la aplicación para actualizarla; no se ha perdido nada.{incompatible === 'remote' && pending && ' Tus últimos cambios siguen guardados solo en este dispositivo.'}</p>{incompatible === 'remote' && <div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button></div>}</div>}{!deleted && !incompatible && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}{!deleted && !incompatible && <PresenceBar participants={participants} selections={selections} />}{!deleted && !incompatible && <div className="format-toolbar" role="toolbar" aria-label="Formato" onMouseDown={(event) => { if ((event.target as HTMLElement).tagName !== 'INPUT') event.preventDefault(); }}><button type="button" disabled={!editable} onClick={() => formatSelection(toggleBold)} aria-label="Negrita"><strong>N</strong></button><button type="button" disabled={!editable} onClick={() => formatSelection((document, start, end) => toggleList(document, start, end))} aria-label="Lista">• Lista</button><button type="button" disabled={!editable} aria-expanded={linkOpen} onClick={() => setLinkOpen(open => !open)} aria-label="Enlace">Enlace</button><button type="button" disabled={!editable} onClick={() => formatSelection(removeLink)} aria-label="Quitar enlace">Quitar enlace</button></div>}{linkOpen && !deleted && !incompatible && <form className="link-form" onSubmit={(event) => { event.preventDefault(); submitLink(); }}><input aria-label="Dirección del enlace" type="url" placeholder="https://" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} /><button type="submit">Aplicar enlace</button></form>}{formatError && <p className="format-hint" role="status">{formatError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable && !deleted && !incompatible} readOnly={deleted || incompatible !== null} value={editorText} onChange={(event) => editContent(event.target.value)} onKeyDown={historyKey} onSelect={(event) => shareCursor(event.currentTarget)} onBlur={() => shareCursor(null)} ref={bindHistoryInput} placeholder="Escribe el contenido de la nota..." />{editorText && <RichPreview blocks={blocks} />}</article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );

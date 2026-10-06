@@ -379,3 +379,12 @@ p {
 .invite-created p { margin: 0; }
 .invite-banner { display: grid; gap: 0.5rem; border: 1px solid #8dc3c0; background: #e7f2f1; border-radius: 0.5rem; padding: 1rem; margin-bottom: 1rem; }
 .invite-banner p { margin: 0; }
+
+.note-card[aria-current='true'] strong::before {
+  content: '▸ ';
+}
+
+.note-card small.note-unsent {
+  color: #6b4a0c;
+  font-weight: 600;
+}
