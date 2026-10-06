@@ -5,7 +5,7 @@ import { createSyncServer } from './server.js';
 import { loadSecurityConfig } from './security.js';
 import { createWorkspaceService } from './workspaces.js';
 import { createNoteService } from './notes.js';
-import { createPostgresSyncStore } from './sync-store.js';
+import { createPostgresSyncStore, loadRetentionMs } from './sync-store.js';
 
 try {
   const config = loadConfig(process.env);
@@ -17,7 +17,7 @@ try {
     security,
     workspaces: createWorkspaceService(database),
     notes: createNoteService(database),
-    syncStore: createPostgresSyncStore(database),
+    syncStore: createPostgresSyncStore(database, { retentionMs: loadRetentionMs(process.env) }),
   });
   const shutdown = () => {
     void app.close().then(() => database.end()).catch(() => {

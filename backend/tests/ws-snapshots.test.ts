@@ -64,6 +64,7 @@ async function saveEdits(client: WebSocket, count: number) {
 
 function recordingStore(snapshot: SyncStore['snapshot']) {
   const calls: Array<{ noteId: string; minUpdates: number }> = [];
+  const compactions: string[] = [];
   const store: SyncStore = {
     async load() { return []; },
     async append() { return true; },
@@ -71,8 +72,9 @@ function recordingStore(snapshot: SyncStore['snapshot']) {
       calls.push({ noteId, minUpdates });
       return snapshot!(noteId, minUpdates);
     },
+    async compact(noteId) { compactions.push(noteId); return 0; },
   };
-  return { store, calls };
+  return { store, calls, compactions };
 }
 
 test('the server asks the store for a snapshot on load and then every snapshotEvery persisted updates', { timeout: 5000 }, async (t) => {
@@ -99,4 +101,17 @@ test('a failing snapshot never breaks saving', { timeout: 5000 }, async (t) => {
   const client = await connect(t, url);
   await saveEdits(client, 3);
   assert.ok(calls.length >= 3);
+});
+
+test('compaction runs only after a snapshot was actually written', { timeout: 5000 }, async (t) => {
+  let written = false;
+  const { store, calls, compactions } = recordingStore(async () => { written = !written; return written; });
+  const { app, url } = await start(store, 1);
+  t.after(() => void app.close());
+  const client = await connect(t, url);
+  await saveEdits(client, 2);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(calls.length >= 3);
+  // Calls alternate written / not written, so compaction follows exactly the written ones.
+  assert.equal(compactions.length, Math.ceil(calls.length / 2));
 });

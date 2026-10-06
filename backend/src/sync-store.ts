@@ -12,13 +12,30 @@ export interface SyncStore {
    * what `load` reconstructs. Optional: stores without it simply replay the whole history.
    */
   snapshot?(noteId: NoteId, minUpdates: number): Promise<boolean>;
+  /**
+   * Deletes the stored updates the latest snapshot already contains, except those younger than the
+   * retention window. Resolves with how many rows were removed. Never changes what `load` rebuilds.
+   */
+  compact?(noteId: NoteId): Promise<number>;
+}
+
+/** Updates covered by a snapshot are kept this long so an old client's re-sent update stays a no-op. */
+export const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Reads `SYNC_RETENTION_HOURS` (a non-negative number of hours; 0 compacts right after each snapshot). */
+export function loadRetentionMs(env: NodeJS.ProcessEnv) {
+  const raw = env.SYNC_RETENTION_HOURS;
+  if (raw === undefined) return DEFAULT_RETENTION_MS;
+  if (!/^[0-9]+(\.[0-9]+)?$/.test(raw)) throw new Error('SYNC_RETENTION_HOURS must be a non-negative number of hours');
+  return Math.round(Number(raw) * 60 * 60 * 1000);
 }
 
 function hashUpdate(update: Uint8Array) {
   return createHash('sha256').update(update).digest('hex');
 }
 
-export function createPostgresSyncStore(database: SqlExecutor): SyncStore {
+export function createPostgresSyncStore(database: SqlExecutor, options: { retentionMs?: number } = {}): SyncStore {
+  const retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS;
   async function latestSnapshot(noteId: NoteId) {
     const result = await database.query<{ covers_update_id: string; state: Buffer }>(
       'SELECT covers_update_id, state FROM syncpad.note_snapshots WHERE note_id = $1',
@@ -82,6 +99,22 @@ export function createPostgresSyncStore(database: SqlExecutor): SyncStore {
       } finally {
         document.doc.destroy();
       }
+    },
+
+    /**
+     * The snapshot row is the only thing that licenses a delete: rows past its `covers_update_id`
+     * are never touched, and with no snapshot the subquery is NULL so nothing matches. Rows inside
+     * the retention window stay, which also keeps their hashes around to deduplicate re-sent updates.
+     */
+    async compact(noteId) {
+      const result = await database.query(
+        `DELETE FROM syncpad.note_updates
+         WHERE note_id = $1
+           AND id <= (SELECT covers_update_id FROM syncpad.note_snapshots WHERE note_id = $1)
+           AND created_at < now() - ($2::bigint * interval '1 millisecond')`,
+        [noteId, retentionMs],
+      );
+      return result.rowCount ?? 0;
     },
   };
 }

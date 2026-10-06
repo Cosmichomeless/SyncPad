@@ -120,7 +120,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     const store = options.syncStore;
     if (!store?.snapshot) return;
     room.sinceSnapshotCheck = 0;
-    void enqueue(room, async () => { await store.snapshot!(noteId, snapshotEvery).catch(() => false); });
+    void enqueue(room, async () => {
+      try {
+        // Only a snapshot that was just written makes older updates redundant.
+        if (await store.snapshot!(noteId, snapshotEvery)) await store.compact?.(noteId);
+      } catch { /* best effort: the update log stays complete */ }
+    });
   };
   const getRoom = (noteId: NoteId) => {
     let room = rooms.get(noteId);
