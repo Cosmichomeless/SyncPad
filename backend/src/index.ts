@@ -5,6 +5,7 @@ import { createSyncServer } from './server.js';
 import { loadSecurityConfig } from './security.js';
 import { createWorkspaceService } from './workspaces.js';
 import { createNoteService } from './notes.js';
+import { createLogger } from './logger.js';
 import { loadLimits } from './limits.js';
 import { createPostgresSyncStore, loadRetentionMs } from './sync-store.js';
 
@@ -12,6 +13,7 @@ try {
   const config = loadConfig(process.env);
   const { host, port } = config;
   const security = loadSecurityConfig(process.env);
+  const logger = createLogger();
   const database = createDatabasePool(config.databaseUrl);
   const app = createSyncServer({
     auth: createAuthService(database),
@@ -20,7 +22,8 @@ try {
     notes: createNoteService(database),
     syncStore: createPostgresSyncStore(database, { retentionMs: loadRetentionMs(process.env) }),
     limits: loadLimits(process.env),
-    onLimit: (event) => console.warn(JSON.stringify({ level: 'warn', msg: 'sync limit hit', ...event })),
+    logger,
+    metricsToken: process.env.METRICS_TOKEN || undefined,
   });
   const shutdown = () => {
     void app.close().then(() => database.end()).catch(() => {
@@ -35,7 +38,7 @@ try {
     process.exitCode = 1;
     shutdown();
   });
-  app.server.listen(port, host, () => console.log('SyncPad listening on port ' + port));
+  app.server.listen(port, host, () => logger.info('SyncPad listening', { port }));
 } catch (error) {
   console.error(error instanceof Error ? error.message : 'Invalid server configuration');
   process.exitCode = 1;

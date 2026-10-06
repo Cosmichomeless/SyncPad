@@ -34,15 +34,15 @@ Decisiones:
 
 ## Señal en logs
 
-`createSyncServer` acepta `onLimit(event)`; el proceso real lo conecta a una
-línea JSON por evento en `console.warn`:
+Cada límite que se activa genera una línea JSON `sync limit hit` (nivel `warn`)
+y suma en `syncpad_limit_hits_total{limit}` (ver #49). `createSyncServer`
+también acepta un hook `onLimit(event)` para tests o integraciones:
 
 ```json
-{"level":"warn","msg":"sync limit hit","limit":"note-size","noteId":"…","chars":500001,"max":500000}
+{"limit":"note-size","noteId":"…","chars":500001,"max":500000,"ts":"…","level":"warn","msg":"sync limit hit"}
 ```
 
-Los eventos son `rate`, `awareness-rate`, `note-size` y `room-full`. #49
-sustituirá `console.warn` por el logger estructurado y las métricas.
+Los eventos son `rate`, `awareness-rate`, `note-size` y `room-full`.
 
 ## Cliente
 

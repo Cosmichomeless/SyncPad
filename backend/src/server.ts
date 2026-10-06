@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
@@ -17,6 +17,8 @@ import { handleNoteRequest } from './note-http.js';
 import type { NoteService } from './notes.js';
 import { isNoteId } from './notes.js';
 import type { SyncStore } from './sync-store.js';
+import { silentLogger, type Logger } from './logger.js';
+import { createMetrics, type Metrics } from './metrics.js';
 import { createRateLimiter, DEFAULT_LIMITS, type LimitEvent, type SyncLimits } from './limits.js';
 
 function cookieValue(header: string | undefined, name: string) {
@@ -61,13 +63,37 @@ function encode(data: Uint8Array) {
   return Buffer.from(data).toString('base64');
 }
 
+/** Constant-time check of an `Authorization: Bearer` header. */
+function bearerMatches(header: string | undefined, token: string) {
+  const expected = Buffer.from(`Bearer ${token}`);
+  const given = Buffer.from(header ?? '');
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
 function decode(value: string) {
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
-export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number; limits?: Partial<SyncLimits>; onLimit?: (event: LimitEvent) => void } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number; limits?: Partial<SyncLimits>; onLimit?: (event: LimitEvent) => void; logger?: Logger; metrics?: Metrics; metricsToken?: string } = {}) {
   const limits: SyncLimits = { ...DEFAULT_LIMITS, ...options.limits };
-  const onLimit = (event: LimitEvent) => { try { options.onLimit?.(event); } catch { /* reporting must never break sync */ } };
+  const logger = options.logger ?? silentLogger;
+  const metrics = options.metrics ?? createMetrics();
+  metrics.describe('syncpad_connections_total', 'WebSocket connections accepted into a note room');
+  metrics.describe('syncpad_reconnects_total', 'Connections by a user to a note shortly after losing a previous one');
+  metrics.describe('syncpad_sync_errors_total', 'sync-error messages sent to clients, by code');
+  metrics.describe('syncpad_limit_hits_total', 'Times a size or load limit fired, by limit');
+  metrics.describe('syncpad_connection_closes_total', 'Closed room connections, by WebSocket close code');
+  metrics.describe('syncpad_updates_total', 'Client updates, by outcome');
+  metrics.describe('syncpad_update_persist_ms', 'Milliseconds from receiving an update to acknowledging it');
+  metrics.describe('syncpad_note_chars', 'Note length in characters after each accepted update');
+  const onLimit = (event: LimitEvent) => {
+    metrics.inc('syncpad_limit_hits_total', { limit: event.limit });
+    logger.warn('sync limit hit', { ...event });
+    try { options.onLimit?.(event); } catch { /* reporting must never break sync */ }
+  };
+  /** When a user last lost a connection to a note: a new one soon after is a reconnect, not a new visit. */
+  const recentDisconnects = new Map<string, number>();
+  const RECONNECT_WINDOW_MS = 5 * 60_000;
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     const origin = req.headers.origin;
@@ -113,11 +139,19 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       res.end(JSON.stringify(response));
       return;
     }
+    // Off unless a token is configured, so a default deployment never exposes it.
+    if (req.method === 'GET' && req.url === '/metrics' && options.metricsToken && bearerMatches(req.headers.authorization, options.metricsToken)) {
+      res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4', 'cache-control': 'no-store' });
+      res.end(metrics.render());
+      return;
+    }
     res.writeHead(404).end();
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxMessageBytes, perMessageDeflate: false });
   const snapshotEvery = Math.max(1, options.snapshotEvery ?? DEFAULT_SNAPSHOT_EVERY);
   const rooms = new Map<string, Promise<NoteRoom>>();
+  metrics.gauge('syncpad_connections_current', () => wss.clients.size);
+  metrics.gauge('syncpad_rooms_current', () => rooms.size);
   /** Asks the store to fold stored updates into a snapshot. Best effort: the update log stays authoritative. */
   const scheduleSnapshot = (noteId: NoteId, room: NoteRoom) => {
     const store = options.syncStore;
@@ -220,6 +254,10 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         const connectionId = randomUUID();
         const participant: AwarenessUser = { connectionId, userId: roomUser?.id ?? 'anonymous', email: roomUser?.email ?? 'anonymous' };
         const send = (message: ServerSyncMessage) => {
+          if (message.type === 'sync-error') {
+            metrics.inc('syncpad_sync_errors_total', { code: message.code });
+            logger.warn('sync error sent', { roomId: noteId, connectionId, code: message.code, retryable: message.retryable });
+          }
           if (client.readyState === client.OPEN) client.send(JSON.stringify(message));
         };
         const broadcastAwareness = (room: NoteRoom) => {
@@ -235,10 +273,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           stateVector: encode(encodeNoteStateVector(room.document.doc)),
         });
         const persistUpdate = async (room: NoteRoom, update: Uint8Array, encoded: string, requestId?: string) => {
+          const started = performance.now();
           const { contentLength } = assertValidNoteUpdate(room.document.doc, update);
           // Only growth is refused, so a note already over a lowered limit can still be shortened.
           if (contentLength > limits.maxNoteChars && contentLength > room.document.content.length) {
             onLimit({ limit: 'note-size', noteId, chars: contentLength, max: limits.maxNoteChars });
+            metrics.inc('syncpad_updates_total', { outcome: 'rejected' });
             send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: 'note-too-large', retryable: false });
             return;
           }
@@ -246,11 +286,15 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             try {
               await options.syncStore.append(noteId, update);
             } catch {
+              metrics.inc('syncpad_updates_total', { outcome: 'failed' });
               send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: 'persistence-unavailable', retryable: true });
               return;
             }
           }
           applyNoteUpdate(room.document.doc, update);
+          metrics.inc('syncpad_updates_total', { outcome: 'accepted' });
+          metrics.observe('syncpad_note_chars', contentLength, [100, 1_000, 10_000, 50_000, 100_000, 250_000, 500_000]);
+          metrics.observe('syncpad_update_persist_ms', performance.now() - started);
           if (options.syncStore && ++room.sinceSnapshotCheck >= snapshotEvery) scheduleSnapshot(noteId, room);
           const payload = JSON.stringify({ type: 'update', update: encoded });
           for (const [peer] of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
@@ -285,11 +329,13 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           } catch (error) {
             // A well-formed update from a different schema generation is not garbage: say so, so the client can stop cleanly.
             const incompatible = isNoteSchemaError(error);
+            metrics.inc('syncpad_updates_total', { outcome: incompatible ? 'incompatible' : 'invalid' });
             send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: incompatible ? 'incompatible-schema' : 'invalid-message', retryable: false });
             client.close(1003, incompatible ? 'Incompatible schema version' : 'Invalid sync message');
           }
         };
         let closed = false;
+        let joinedAt: number | undefined;
         // Listeners are attached before the room loads so an eager handshake is queued, not dropped.
         let ready: Promise<NoteRoom | undefined> = getRoom(noteId).then(async (room) => {
           if (closed) return undefined;
@@ -300,6 +346,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             return undefined;
           }
           room.clients.set(client, participant);
+          joinedAt = Date.now();
+          metrics.inc('syncpad_connections_total');
+          const lostAt = recentDisconnects.get(`${noteId}:${participant.userId}`);
+          const reconnect = lostAt !== undefined && joinedAt - lostAt < RECONNECT_WINDOW_MS;
+          if (reconnect) metrics.inc('syncpad_reconnects_total');
+          logger.info('ws connected', { roomId: noteId, connectionId, userId: participant.userId, reconnect, clients: room.clients.size });
           await enqueue(room, async () => send(snapshot(room)));
           broadcastAwareness(room);
           return room;
@@ -330,8 +382,15 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             return room;
           });
         });
-        client.once('close', () => {
+        client.once('close', (code) => {
           closed = true;
+          metrics.inc('syncpad_connection_closes_total', { code });
+          if (joinedAt !== undefined) {
+            const now = Date.now();
+            recentDisconnects.set(`${noteId}:${participant.userId}`, now);
+            if (recentDisconnects.size > 1000) for (const [key, at] of recentDisconnects) if (now - at >= RECONNECT_WINDOW_MS) recentDisconnects.delete(key);
+            logger.info('ws closed', { roomId: noteId, connectionId, code, durationMs: now - joinedAt });
+          }
           void ready.then((room) => {
             if (!room) return;
             room.clients.delete(client);
