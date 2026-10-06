@@ -4,9 +4,6 @@ Cada archivo documenta lo implementado para una issue de GitHub: objetivo,
 decisiones, verificación y límites. Los números siguen el orden de las issues.
 Para la visión de conjunto, ver [../architecture.md](../architecture.md).
 
-Los documentos de las issues #57 en adelante (calidad automatizada, Docker, CI,
-despliegue y publicación) se añadirán a este índice cuando existan.
-
 ## Fundamentos del proyecto
 
 | Issue | Documento |
@@ -108,7 +105,19 @@ despliegue y publicación) se añadirán a este índice cuando existan.
 | #53 | [Pruebas con payloads maliciosos o malformados](053-malformed-payloads.md) |
 | #54 | [Sanear el rich text y los enlaces](054-sanitize-rich-text.md) |
 
-## Calidad, Docker, CI y publicación
+## Calidad automatizada, Docker y CI
 
-Pendiente de documentar en este directorio: #57 en adelante. El despliegue y la
-demo pública dependen de #64–#67.
+| Issue | Documento |
+| --- | --- |
+| #57 | [Pruebas de integración PostgreSQL + WebSocket](057-pg-ws-integration.md) |
+| #58 | [Contenedor del frontend](058-frontend-docker.md) |
+| #59 | [Contenedor del servidor de sincronización](059-backend-docker.md) |
+| #60 | [Stack completo con Docker Compose](060-docker-compose.md) |
+| #61 | [Comprobaciones de CI para el frontend](061-ci-frontend.md) |
+| #62 | [Comprobaciones de CI para el backend](062-ci-backend.md) |
+| #63 | [Comando de smoke test](063-smoke-command.md) |
+
+## Despliegue y publicación
+
+Pendiente de documentar en este directorio: #64 en adelante. El despliegue y la
+demo pública dependen de #64–#67 y de la elección de hosting.
