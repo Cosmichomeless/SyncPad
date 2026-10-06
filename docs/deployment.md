@@ -112,25 +112,47 @@ relativas.
 La fuente de verdad es PostgreSQL (`syncpad.note_updates` y `syncpad.note_snapshots`;
 ver [architecture.md](architecture.md)). Plan:
 
-1. **Qué se copia**: volcado lógico del esquema `syncpad` con `pg_dump`, que incluye
-   cuentas, workspaces, notas, registro de updates y snapshots.
+1. **Qué se copia**: volcado lógico con `pg_dump` del esquema `syncpad` (cuentas,
+   workspaces, notas, registro de updates y snapshots) y del libro de migraciones
+   `public.schema_migrations`.
 2. **Cuándo**: manualmente antes de cada despliegue que toque migraciones y una vez por
    semana mientras la demo esté activa. Un volcado de una demo pesa kilobytes.
 3. **Dónde**: fuera del repositorio y de la imagen (contiene datos de personas y hashes
    de contraseñas). Nunca en Git.
-4. **Restauración**: a una base **vacía** con `psql`, y después se comprueba una nota
-   concreta. La ventana de 6 h de Neon es un segundo recurso para errores recientes,
+4. **Restauración**: a una base **vacía** con `psql` (`restore.sh` se niega si ya existe
+   el esquema `syncpad`), y después se comprueba una nota concreta. La ventana de 6 h de Neon es un segundo recurso para errores recientes,
    no la copia.
 5. **Qué se acepta perder**: lo escrito desde el último volcado. Los clientes con
    cambios locales los reenviarán al reconectar, porque Yjs fusiona el estado que
    falta; por eso restaurar es seguro para ediciones que aún estén en un navegador.
 
-Los scripts `scripts/backup.sh` y `scripts/restore.sh` y su prueba con una nota de
-ejemplo se entregan en #66.
+### Uso
+
+```sh
+DATABASE_URL='postgresql://…@…neon.tech/neondb?sslmode=require' sh scripts/backup.sh
+# → backups/syncpad-20261007T120000Z.sql (ignorada por Git y por la imagen, permisos 600)
+
+# Restaurar: crear antes una base vacía (en Neon, una rama o una base nueva)
+DATABASE_URL='<url de la base vacía>' sh scripts/restore.sh backups/syncpad-….sql
+```
+
+- Los scripts no necesitan `pg_dump` ni `psql` en el equipo: lanzan un contenedor
+  `postgres:<versión mayor del servidor>-alpine` (hace falta Docker). `PG_IMAGE` fuerza otra
+  imagen. Un volcado debe restaurarse en un servidor de la misma versión mayor o superior.
+- `backup.sh` escribe en un fichero `.partial` y solo lo renombra si el volcado termina con
+  la marca de «dump complete»; un volcado cortado no pasa por bueno.
+- Tras restaurar, el script imprime el recuento de notas, updates y snapshots. El servicio
+  se apunta a la base restaurada cambiando `DATABASE_URL` en Render y reiniciando.
+- **Verificado** por `backend/integration/backup-restore.int.test.ts`: crea una cuenta, una
+  nota con dos updates y un snapshot, hace el volcado, lo restaura en una base nueva, abre
+  un servidor sobre ella y comprueba que el texto y el historial siguen ahí; y que un
+  fichero que no es un volcado se rechaza sin tocar la base.
+- **Alta de Neon (manual)**: crear cuenta gratuita en neon.com, un proyecto en la región
+  más cercana a la de Render, copiar la cadena de conexión **directa** (no la del pooler)
+  con `sslmode=require` y guardarla solo como variable `DATABASE_URL` del servicio.
 
 
 ## Pendiente
 
-- Base de datos gestionada, migraciones y copias probadas: #66.
 - Configuración de despliegue y prueba con dos usuarios: #67.
 - Humo posterior al despliegue y recuperación: #68.
