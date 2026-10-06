@@ -52,8 +52,8 @@ Cifras de la documentación de los proveedores consultadas el 2026-10-07; pueden
 | Neon, cómputo | 100 CU-h al mes; se suspende a los 5 min sin conexiones | La primera consulta tras suspender añade latencia de arranque |
 | Neon, restauración | Ventana de 6 h (hasta 1 GB de cambios) | No sustituye a una copia: ver plan de copias |
 
-La memoria del plan gratuito de Render no se ha verificado aquí; se medirá en #67
-con el contenedor desplegado antes de afirmar nada.
+La memoria del plan gratuito de Render no se ha verificado: en local el contenedor usa
+~83 MiB en reposo, y la medición sobre la URL real queda para el humo de #68.
 
 ## Límites de un solo nodo
 
@@ -175,7 +175,7 @@ DATABASE_URL='<url de la base vacía>' sh scripts/restore.sh backups/syncpad-…
    (`render.yaml` en la raíz), y pegar `DATABASE_URL` cuando lo pida.
 3. Esperar al primer despliegue (compila las dos aplicaciones; varios minutos) y abrir la
    URL `https://<nombre>.onrender.com`.
-4. Ejecutar el humo posterior al despliegue de #68 contra esa URL.
+4. Ejecutar el [humo posterior al despliegue](#humo-posterior-al-despliegue-68) contra esa URL.
 
 ### Verificado en local (2026-10-07)
 
@@ -193,5 +193,49 @@ y sale con código 0. Memoria en reposo: ~83 MiB (no se ha medido bajo carga ni 
   (~1 min de arranque en frío): lo cubre el humo de #68.
 - Cuotas de RAM y CPU del plan gratuito.
 
+## Humo posterior al despliegue (#68)
+
+```sh
+cd backend && npx tsx ../scripts/smoke-public.mts https://<servicio>.onrender.com
+```
+
+Despierta el servicio si duerme (hasta 150 s y avisa del arranque en frío) y comprueba, con
+una cuenta nueva `smoke-<uuid>@example.test`: `/health` y la web en el mismo origen; cookie de
+sesión `HttpOnly`, `SameSite=Lax` y `Secure`; conexión `wss://`; edición con `ack` que llega a
+un segundo navegador; el texto sigue ahí tras cerrar todos los sockets y entrar con un
+navegador nuevo; y un `Origin` ajeno recibe 403. Sale con código 1 si falla algo. Deja una
+cuenta, un workspace y una nota de prueba en la base: se pueden borrar desde la propia app.
+
+Ensayado en local contra la imagen de `deploy/Dockerfile` (10 comprobaciones en verde) y con
+`COOKIE_SECURE=false` (falla la comprobación `Secure`, como debe). Sobre la URL real aún no se
+ha ejecutado.
+
+## Operación y recuperación (#68)
+
+| Síntoma | Causa probable | Qué hacer |
+| --- | --- | --- |
+| La primera carga tarda ~1 min | El servicio gratuito dormía | Esperar; el humo lo mide. No es un fallo |
+| `/health` responde pero guardar falla («Pendiente» permanente) | Neon suspendido o con la cuota agotada | Reintentar a los segundos; si persiste, revisar el panel de Neon (CU-h del mes) |
+| 403 al conectar o al hacer POST | `CORS_ORIGIN` distinto de la URL real (dominio propio, `www`) | Definir `CORS_ORIGIN` con el origen exacto y reiniciar |
+| El servicio no arranca: «Migrations failed» | Migración nueva con error o `DATABASE_URL` incorrecta | Ver los logs de Render; corregir y redesplegar. Una migración fallida no deja la app escuchando |
+| Cuentas o notas perdidas | Error humano o de datos | Restaurar (abajo) |
+
+**Reiniciar**: *Manual Deploy → Restart service* en Render. Los clientes reconectan solos y
+reenvían lo que tuvieran sin confirmar; no se pierde lo que ya tenía `ack`.
+
+**Volver atrás un despliegue**: en Render, *Events → Rollback* al despliegue anterior. Las
+migraciones de este proyecto solo añaden, así que la versión previa sigue funcionando con
+el esquema nuevo; si una migración futura fuera destructiva, restaurar antes una copia.
+
+**Restaurar datos**: 1) `sh scripts/backup.sh` de lo que quede, por si acaso; 2) crear una
+base vacía en Neon (rama o base nueva); 3) `DATABASE_URL=<esa base> sh scripts/restore.sh
+backups/<fichero>.sql`; 4) comprobar el recuento que imprime y abrir una nota; 5) cambiar
+`DATABASE_URL` del servicio en Render y reiniciar; 6) ejecutar el humo. Para un error de las
+últimas 6 h, la restauración de Neon a un punto anterior evita pasar por el volcado.
+
+**Rotar secretos**: nueva contraseña en Neon → actualizar `DATABASE_URL` en Render →
+reiniciar; `METRICS_TOKEN` se regenera borrando la variable y volviendo a sincronizar el
+blueprint. Borrar el commit que lo filtró no basta.
+
 ## Pendiente
-- Humo posterior al despliegue y recuperación: #68.
+- Despliegue real, URL pública y release `v1.0.0`: #69 (requiere las cuentas de Render y Neon).
