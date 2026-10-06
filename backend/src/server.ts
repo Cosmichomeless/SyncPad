@@ -5,7 +5,7 @@ import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type WebSocket from 'ws';
 import type { ClientSyncMessage, HealthResponse, ServerSyncMessage } from '@syncpad/shared';
-import { applyNoteUpdate, assertValidNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince, encodeNoteStateVector } from '@syncpad/shared';
+import { applyNoteUpdate, assertValidNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince, encodeNoteStateVector, isNoteSchemaError } from '@syncpad/shared';
 import type { NoteId } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
@@ -223,9 +223,11 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             } else if (message.type === 'awareness') {
               broadcastAwareness(room);
             }
-          } catch {
-            send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: 'invalid-message', retryable: false });
-            client.close(1003, 'Invalid sync message');
+          } catch (error) {
+            // A well-formed update from a different schema generation is not garbage: say so, so the client can stop cleanly.
+            const incompatible = isNoteSchemaError(error);
+            send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: incompatible ? 'incompatible-schema' : 'invalid-message', retryable: false });
+            client.close(1003, incompatible ? 'Incompatible schema version' : 'Invalid sync message');
           }
         };
         let closed = false;
@@ -236,7 +238,13 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           await enqueue(room, async () => send(snapshot(room)));
           broadcastAwareness(room);
           return room;
-        }, () => {
+        }, (error: unknown) => {
+          // Stored history this build cannot read (e.g. after a rollback) must not be retried or overwritten.
+          if (isNoteSchemaError(error)) {
+            send({ type: 'sync-error', code: 'incompatible-schema', retryable: false });
+            client.close(1011, 'Incompatible schema version');
+            return undefined;
+          }
           send({ type: 'sync-error', code: 'persistence-unavailable', retryable: true });
           client.close(1011, 'Note storage unavailable');
           return undefined;

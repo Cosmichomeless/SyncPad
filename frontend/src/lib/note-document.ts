@@ -1,17 +1,47 @@
 import * as Y from 'yjs';
 
+// Mirrors shared/src/document.ts (a second Yjs copy would break if the frontend imported it); a test keeps them equal.
 const DOCUMENT_SCHEMA_VERSION = 1;
+/** Every replica writes the initial version under this client id so they all create the same Yjs item. */
+const BOOTSTRAP_CLIENT_ID = 0;
 
 export type EditorDocument = {
   doc: Y.Doc;
   content: Y.Text;
 };
 
+/** The state this build is asked to apply declares a schema version it cannot read. */
+export class NoteSchemaError extends Error {
+  constructor(readonly found: unknown) {
+    super('Unsupported note document schema version');
+    this.name = 'NoteSchemaError';
+  }
+}
+
 export function createEditorDocument(): EditorDocument {
   const doc = new Y.Doc();
   const root = doc.getMap<unknown>('note');
+  const clientID = doc.clientID;
+  doc.clientID = BOOTSTRAP_CLIENT_ID;
   root.set('schemaVersion', DOCUMENT_SCHEMA_VERSION);
+  doc.clientID = clientID;
   return { doc, content: doc.getText('content') };
+}
+
+/**
+ * Throws NoteSchemaError when applying `update` on top of `document` would leave a schema version
+ * this build does not understand. The document itself is never touched: the update is tried on a copy.
+ */
+export function assertCompatibleUpdate(document: Y.Doc, update: Uint8Array) {
+  const trial = new Y.Doc();
+  try {
+    Y.applyUpdate(trial, Y.encodeStateAsUpdate(document));
+    Y.applyUpdate(trial, update);
+    const found = trial.getMap<unknown>('note').get('schemaVersion');
+    if (found !== DOCUMENT_SCHEMA_VERSION) throw new NoteSchemaError(found);
+  } finally {
+    trial.destroy();
+  }
 }
 
 export const LOCAL_EDIT_ORIGIN = Symbol('syncpad.local-edit');

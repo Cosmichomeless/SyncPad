@@ -230,6 +230,19 @@ button:disabled {
   margin: 0 0 0.5rem;
 }
 
+.incompatible-note {
+  background: #fff6e0;
+  border-left: 3px solid #b27a00;
+  border-radius: 0.2rem;
+  color: #4d3600;
+  margin: 0 0 0.75rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.incompatible-note p {
+  margin: 0 0 0.5rem;
+}
+
 .orphan-list {
   display: grid;
   gap: 0.5rem;

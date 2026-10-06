@@ -74,6 +74,7 @@ function harness(options: { server?: FakeServer; document?: EditorDocument; onli
   const pending: boolean[] = [];
   const errors: string[] = [];
   const gone: number[] = [];
+  const incompatible: number[] = [];
   const listeners = new Map<string, Set<() => void>>();
   const events = {
     addEventListener: (type: string, listener: EventListenerOrEventListenerObject) => { (listeners.get(type) ?? listeners.set(type, new Set()).get(type)!).add(listener as () => void); },
@@ -88,6 +89,7 @@ function harness(options: { server?: FakeServer; document?: EditorDocument; onli
     onPending: (value) => pending.push(value),
     onError: (message) => errors.push(message),
     onGone: () => gone.push(Date.now()),
+    onIncompatible: () => incompatible.push(Date.now()),
     probe: options.probe,
     online: () => network.online,
     events,
@@ -100,7 +102,7 @@ function harness(options: { server?: FakeServer; document?: EditorDocument; onli
     },
   });
   const current = () => sockets[sockets.length - 1];
-  return { document, sync, sockets, states, pending, errors, gone, emit, current, network, listeners, state: () => states[states.length - 1] };
+  return { document, sync, sockets, states, pending, errors, gone, incompatible, emit, current, network, listeners, state: () => states[states.length - 1] };
 }
 
 function text(document: EditorDocument) { return document.content.toString(); }
@@ -473,5 +475,82 @@ test('without a network the probe is not asked', async () => {
   await sleep(40);
   assert.equal(probes, 0);
   assert.equal(h.gone.length, 0);
+  h.sync.destroy();
+});
+
+/** What a client built after a schema bump would send for a note whose current state is `base`. */
+function futureUpdate(base: Uint8Array, version = 2) {
+  const future = new Y.Doc();
+  Y.applyUpdate(future, base);
+  future.getMap<unknown>('note').set('schemaVersion', version);
+  future.getText('content').insert(0, `v${version}: `);
+  return Y.encodeStateAsUpdate(future, Y.encodeStateVector(new Y.Doc()));
+}
+
+test('a handshake answer in a newer schema is refused before it touches the document', async () => {
+  const document = createEditorDocument();
+  applyLocalTextEdit(document, 'mi texto local');
+  const before = encodeEditorState(document.doc);
+  const server = new FakeServer();
+  Y.applyUpdate(server.doc, futureUpdate(encodeEditorState(createEditorDocument().doc)));
+  const h = harness({ server, document });
+  h.current().open();
+  await until(() => h.incompatible.length === 1, 'incompatible');
+  assert.deepEqual(encodeEditorState(document.doc), before, 'document untouched');
+  assert.equal(text(document), 'mi texto local');
+  assert.equal(h.state(), 'offline');
+  assert.equal(h.errors.length, 0);
+  await sleep(120);
+  assert.equal(h.sockets.length, 1, 'no reconnection attempts');
+  assert.equal(h.current().sent.some((message) => message.type === 'update'), false, 'local edits are never uploaded to a schema we cannot read');
+  h.sync.destroy();
+});
+
+test('a live update in a newer schema stops syncing without being applied', async () => {
+  const server = new FakeServer();
+  const h = harness({ server });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  applyLocalTextEdit(h.document, 'antes');
+  await until(() => h.state() === 'up-to-date' && server.text() === 'antes', 'saved');
+  const before = encodeEditorState(h.document.doc);
+  h.current().receive({ type: 'update', update: b64(futureUpdate(encodeEditorState(h.document.doc))) });
+  assert.equal(h.incompatible.length, 1);
+  assert.deepEqual(encodeEditorState(h.document.doc), before);
+  applyLocalTextEdit(h.document, 'antes y después');
+  assert.equal(h.sockets.length, 1);
+  assert.equal(h.pending[h.pending.length - 1], true, 'the edit stays pending on this device');
+  assert.equal(text(h.document), 'antes y después');
+  h.sync.destroy();
+});
+
+test('an incompatible-schema error from the server is final and keeps the text', async () => {
+  const server = new FakeServer();
+  const h = harness({ server });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  applyLocalTextEdit(h.document, 'cambios locales');
+  h.current().receive({ type: 'sync-error', code: 'incompatible-schema', retryable: false });
+  assert.equal(h.incompatible.length, 1);
+  assert.equal(h.state(), 'offline');
+  await sleep(120);
+  assert.equal(h.sockets.length, 1);
+  h.sync.retry();
+  assert.equal(h.sockets.length, 1, 'retry cannot help until the app is updated');
+  assert.equal(text(h.document), 'cambios locales');
+  h.sync.destroy();
+});
+
+test('compatible remote updates keep applying normally', async () => {
+  const server = new FakeServer();
+  const h = harness({ server });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  const remote = createEditorDocument();
+  Y.applyUpdate(remote.doc, encodeEditorState(h.document.doc));
+  applyLocalTextEdit(remote, 'desde otro cliente');
+  h.current().receive({ type: 'update', update: b64(encodeEditorState(remote.doc)) });
+  assert.equal(text(h.document), 'desde otro cliente');
+  assert.equal(h.incompatible.length, 0);
   h.sync.destroy();
 });

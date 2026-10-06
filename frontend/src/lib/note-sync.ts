@@ -1,5 +1,5 @@
 import type { ClientSyncMessage, ServerSyncMessage } from '@syncpad/shared';
-import { applyEditorUpdate, encodeEditorStateSince, encodeEditorStateVector, LOCAL_EDIT_ORIGIN, REMOTE_ORIGIN, type EditorDocument } from './note-document';
+import { applyEditorUpdate, assertCompatibleUpdate, encodeEditorStateSince, encodeEditorStateVector, LOCAL_EDIT_ORIGIN, NoteSchemaError, REMOTE_ORIGIN, type EditorDocument } from './note-document';
 
 export type SyncState = 'offline' | 'reconnecting' | 'syncing' | 'up-to-date';
 export type NoteSyncHandle = { retry(): void; destroy(): void };
@@ -20,6 +20,12 @@ export type NoteSyncOptions = {
    * local document is left untouched so the caller can offer recovery.
    */
   onGone?(): void;
+  /**
+   * Called once when the server holds the note in a schema version this build cannot read (or
+   * refuses ours). Syncing stops for good and nothing remote is ever applied: the local document
+   * stays exactly as it was until the app is updated.
+   */
+  onIncompatible?(): void;
   /**
    * Asked after a connection attempt failed before opening, because a WebSocket upgrade
    * cannot tell "deleted" from "offline". Must resolve 'unknown' when it cannot decide.
@@ -56,7 +62,7 @@ function fromBase64(value: string) {
  * caller and survive every reconnect and destroy().
  */
 export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
-  const { document, url, onState, onPending, onError, onGone, probe } = options;
+  const { document, url, onState, onPending, onError, onGone, onIncompatible, probe } = options;
   const timing = { ...DEFAULT_TIMING, ...options.timing };
   const online = options.online ?? (() => navigator.onLine);
   const events = options.events ?? window;
@@ -65,6 +71,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   let destroyed = false;
   let failed = false;
   let gone = false;
+  let incompatible = false;
   let probing = false;
   let socket: WebSocket | null = null;
   let handshakeId: string | null = null;
@@ -86,7 +93,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   function publish() {
     if (destroyed) return;
     let state: SyncState;
-    if (failed || gone) state = 'offline';
+    if (failed || gone || incompatible) state = 'offline';
     else if (!isOpen()) state = online() ? 'reconnecting' : 'offline';
     else if (!reconciled || upload || localRevision !== acknowledged) state = 'syncing';
     else state = 'up-to-date';
@@ -128,7 +135,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   }
 
   function scheduleReconnect() {
-    if (destroyed || failed || gone) return;
+    if (destroyed || failed || gone || incompatible) return;
     publish();
     if (!online() || retryTimer !== undefined) return;
     const delay = Math.min(timing.maxDelayMs, timing.initialDelayMs * 2 ** attempt);
@@ -150,8 +157,30 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
     onGone?.();
   }
 
+  function markIncompatible() {
+    if (incompatible || gone || destroyed) return;
+    incompatible = true;
+    teardown();
+    clearRetry();
+    publish();
+    onIncompatible?.();
+  }
+
+  /** Applies a remote update only if it keeps the schema readable; otherwise stops syncing for good. */
+  function applyRemote(update: Uint8Array): boolean {
+    try {
+      assertCompatibleUpdate(document.doc, update);
+    } catch (error) {
+      if (!(error instanceof NoteSchemaError)) throw error;
+      markIncompatible();
+      return false;
+    }
+    applyEditorUpdate(document.doc, update, REMOTE_ORIGIN);
+    return true;
+  }
+
   function probeNote() {
-    if (!probe || probing || gone || destroyed || !online()) return;
+    if (!probe || probing || gone || incompatible || destroyed || !online()) return;
     probing = true;
     void probe().then((result) => { if (result === 'gone') markGone(); }, () => {}).finally(() => { probing = false; });
   }
@@ -193,7 +222,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
       case 'sync': {
         const correlated = message.requestId !== undefined && message.requestId === handshakeId;
         if (message.requestId !== undefined && !correlated) return;
-        applyEditorUpdate(document.doc, fromBase64(message.update), REMOTE_ORIGIN);
+        if (!applyRemote(fromBase64(message.update))) return;
         if (!correlated) { publish(); return; }
         handshakeId = null;
         baseVector = fromBase64(message.stateVector);
@@ -203,7 +232,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
         return;
       }
       case 'update':
-        applyEditorUpdate(document.doc, fromBase64(message.update), REMOTE_ORIGIN);
+        applyRemote(fromBase64(message.update));
         return;
       case 'ack': {
         if (!upload || message.requestId !== upload.id) return;
@@ -219,6 +248,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
       }
       case 'sync-error': {
         if (message.code === 'note-deleted') { markGone(); return; }
+        if (message.code === 'incompatible-schema') { markIncompatible(); return; }
         if (message.requestId !== undefined && message.requestId !== handshakeId && message.requestId !== upload?.id) return;
         if (message.retryable) failTransport();
         else failPermanently('El servidor rechazó la sincronización. Tus cambios siguen guardados en este dispositivo.');
@@ -228,7 +258,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   }
 
   function connect() {
-    if (destroyed || gone) return;
+    if (destroyed || gone || incompatible) return;
     clearRetry();
     if (!online()) { publish(); return; }
     const connection = openSocket(url);
@@ -283,7 +313,7 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
 
   return {
     retry() {
-      if (destroyed || gone) return;
+      if (destroyed || gone || incompatible) return;
       failed = false;
       attempt = 0;
       teardown();

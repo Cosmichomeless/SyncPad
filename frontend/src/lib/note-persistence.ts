@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { assertCompatibleUpdate } from './note-document';
 
 export function noteStorageKey(userId: string, noteId: string): string {
   return 'syncpad:note:' + JSON.stringify([userId, noteId]);
@@ -58,6 +59,8 @@ export function persistNote(userId: string, noteId: string, doc: Y.Doc, onError:
     try {
       const updates = await transact(db, 'readonly', (store) => store.getAll());
       if (cancelled) return;
+      // Refuse a copy written by a newer editor before it touches the document or is rewritten.
+      if (updates.length) assertCompatibleUpdate(doc, Y.mergeUpdates(updates));
       Y.transact(doc, () => {
         for (const update of updates) Y.applyUpdate(doc, update);
       });
