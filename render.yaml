@@ -1,0 +1,18 @@
+# Render Blueprint: one free Docker web service (see docs/deployment.md). The database lives in
+# Neon, so its URL is the only secret and is typed in the Render dashboard, never committed.
+services:
+  - type: web
+    name: syncpad
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      # Neon's direct (non-pooler) connection string, with sslmode=require.
+      - key: DATABASE_URL
+        sync: false
+      # Render generates a random value; it unlocks GET /metrics.
+      - key: METRICS_TOKEN
+        generateValue: true
+      # CORS_ORIGIN is taken from RENDER_EXTERNAL_URL unless set here (custom domain).
