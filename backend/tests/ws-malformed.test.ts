@@ -99,6 +99,14 @@ async function assertBystandersUnharmed(ctx: Awaited<ReturnType<typeof start>>, 
   assert.equal(Buffer.from(persisted[0]).includes(CANARY), false);
 }
 
+/** A well-formed update whose text carries `attributes` — valid Yjs, forbidden content. */
+function markedUpdate(attributes: Record<string, unknown>) {
+  const author = createNoteDocument();
+  author.content.insert(0, 'enlace ' + CANARY);
+  author.content.format(0, 6, attributes);
+  return base64(encodeNoteState(author.doc));
+}
+
 const HOSTILE: [string, string | Buffer][] = [
   ['empty text', ''],
   ['not JSON', 'esto no es json ' + CANARY],
@@ -113,6 +121,9 @@ const HOSTILE: [string, string | Buffer][] = [
   ['update that is not Yjs', JSON.stringify({ type: 'update', requestId: 'a', update: base64(Buffer.from(CANARY)) })],
   ['update with random bytes', JSON.stringify({ type: 'update', requestId: 'a', update: base64(Uint8Array.from({ length: 200 }, (_, i) => (i * 37 + 11) % 256)) })],
   ['update that is truncated Yjs', JSON.stringify({ type: 'update', requestId: 'a', update: textUpdate(CANARY).slice(0, 12) })],
+  ['link mark with a javascript: URL', JSON.stringify({ type: 'update', requestId: 'a', update: markedUpdate({ link: 'javascript:alert(1)' }) })],
+  ['link mark with a data: URL', JSON.stringify({ type: 'update', requestId: 'a', update: markedUpdate({ link: 'data:text/html;base64,PHNjcmlwdD4=' }) })],
+  ['unknown mark (onclick)', JSON.stringify({ type: 'update', requestId: 'a', update: markedUpdate({ onclick: 'alert(1)' }) })],
   ['state vector that is not Yjs', JSON.stringify({ type: 'sync-request', requestId: 'a', stateVector: base64(Buffer.from(CANARY)) })],
   ['requestId that is a number', JSON.stringify({ type: 'sync-request', requestId: 7 })],
   ['requestId that is an object', JSON.stringify({ type: 'update', requestId: { a: CANARY }, update: textUpdate('x') })],

@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { isAllowedTextAttribute } from './rich-text-policy.js';
 
 export const DOCUMENT_SCHEMA_VERSION = 1 as const;
 export const NOTE_ROOT_NAME = 'note';
@@ -23,6 +24,15 @@ export class NoteSchemaError extends Error {
   constructor(readonly found: unknown) {
     super('Unsupported note document schema version');
     this.name = 'NoteSchemaError';
+  }
+}
+
+/** The update is valid Yjs for this schema but carries content the note format does not allow. */
+export class NoteContentError extends Error {
+  readonly code = 'NOTE_CONTENT_FORBIDDEN';
+  constructor(readonly reason: string) {
+    super(`Note update carries forbidden content: ${reason}`);
+    this.name = 'NoteContentError';
   }
 }
 
@@ -82,7 +92,18 @@ export function assertValidNoteUpdate(doc: Y.Doc, update: Uint8Array): { content
   const trial = new Y.Doc();
   try {
     Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
+    // Only what this update adds is judged, so a note that predates the policy is not locked out.
+    let forbidden: string | undefined;
+    trial.getText(NOTE_CONTENT_NAME).observe((event) => {
+      for (const op of event.delta) {
+        if (op.insert !== undefined && typeof op.insert !== 'string') forbidden ??= 'embedded content';
+        for (const [key, value] of Object.entries(op.attributes ?? {})) {
+          if (!isAllowedTextAttribute(key, value)) forbidden ??= `text attribute "${key}"`;
+        }
+      }
+    });
     applyNoteUpdate(trial, update);
+    if (forbidden) throw new NoteContentError(forbidden);
     return { contentLength: trial.getText(NOTE_CONTENT_NAME).length };
   } finally {
     trial.destroy();

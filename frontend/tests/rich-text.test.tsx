@@ -183,3 +183,28 @@ test('formatted documents stay valid schema v1 and old builds read the same plai
   assert.equal(legacy.getText('content').toString(), 'hola mundo');
   assert.equal(legacy.getMap('note').get('schemaVersion'), 1);
 });
+
+test('a note that already holds hostile marks or markup renders inert, whatever slipped into the history (#54)', () => {
+  const doc = createEditorDocument();
+  const hostileLinks = ['javascript:alert(1)', ' JaVaScRiPt:alert(1)', 'java\tscript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'vbscript:msgbox(1)', 'file:///etc/passwd', '//evil.example', '/relative', 'https://user:pw@evil.example/', { href: 'x' }, 42, true];
+  hostileLinks.forEach((link, index) => {
+    const start = doc.content.length;
+    doc.content.insert(start, `enlace${index} `, { link, onclick: 'alert(1)', style: 'position:fixed', bold: 'yes' });
+  });
+  doc.content.insert(doc.content.length, '<script>alert(1)</script><img src=x onerror=alert(1)>\n- <b onmouseover=alert(1)>item</b>');
+  const output = html(doc);
+  assert.doesNotMatch(output, /href="(?!https?:|mailto:)/i, 'no link outside http(s)/mailto');
+  assert.doesNotMatch(output, /javascript:|vbscript:|data:text|file:/i);
+  assert.doesNotMatch(output, /<script|<img|<b[ >]/i, 'no active elements');
+  assert.doesNotMatch(output, /<[^>]*\s(on\w+|style)=/i, 'no inline handlers or styles on any element');
+  assert.match(output, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/, 'markup is shown as text');
+});
+
+test('a link a client may write is exactly one the renderer will link', () => {
+  for (const url of ['https://example.com/a?b=1#c', 'http://example.com', 'mailto:ana@example.com', '  https://example.com  ']) {
+    assert.notEqual(sanitizeLinkUrl(url), null, url);
+  }
+  for (const url of ['javascript:alert(1)', '', ' ', `https://example.com/${'a'.repeat(2100)}`, null, undefined, {}]) {
+    assert.equal(sanitizeLinkUrl(url), null, String(url));
+  }
+});

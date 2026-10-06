@@ -107,8 +107,10 @@ export {
   encodeNoteStateVector,
   isNoteSchemaError,
   NOTE_CONTENT_NAME,
+  NoteContentError,
   NOTE_ROOT_NAME,
   NoteSchemaError,
   readSchemaVersion,
 } from './document.js';
 export type { NoteDocument } from './document.js';
+export { ALLOWED_LINK_PROTOCOLS, isAllowedTextAttribute, MAX_LINK_LENGTH, sanitizeLinkUrl } from './rich-text-policy.js';

@@ -50,7 +50,7 @@ líneas que empiezan por `- `:
   más de 2048 caracteres). Se valida **al crear** el enlace y **al pintar**, porque
   un cliente malicioso puede escribir cualquier atributo en el documento
   compartido. Los enlaces llevan `rel="noopener noreferrer nofollow"` y `target="_blank"`.
-- El servidor todavía no filtra atributos en los updates (queda para #54).
+- El servidor rechaza los updates con marcas no permitidas (#54, ver `054-sanitize-rich-text.md`).
 
 ## Verificación
 
@@ -73,4 +73,4 @@ líneas que empiezan por `- `:
 - La lista usa un prefijo textual (`- `): un cliente antiguo ve esos guiones en
   claro. Las marcas de otros formatos podrían añadirse sin subir versión mientras
   sean atributos.
-- Las marcas no se restringen en servidor ni en tamaño (#48, #54).
+- Las marcas se restringen en servidor (#54) pero no en cantidad; solo las acota el tamaño de la nota (#48).
