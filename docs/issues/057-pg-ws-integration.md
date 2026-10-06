@@ -97,19 +97,17 @@ Los tests no importan `yjs`: usan los helpers de `@syncpad/shared`.
 - **Sin servicio propio en Compose.** Reutilizan el contenedor de desarrollo, ya
   que solo crean bases con nombre único y las borran.
 
-## Defecto detectado en las migraciones (no corregido aquí)
+## Defecto detectado en las migraciones (corregido después)
 
-`migrate.ts` crea `schema_migrations` sin cualificar. Con el rol `syncpad`, el
-`search_path` por defecto (`"$user", public`) resuelve `"$user"` al esquema
-`syncpad` en cuanto existe. La primera ejecución crea la tabla en `public`; la
-segunda, como el esquema `syncpad` ya existe, crea **otra** `syncpad.schema_migrations`
-vacía, vuelve a aplicar las ocho migraciones y las apunta ahí (el mensaje es otra
-vez `Applied 8 migration(s)`). Las terceras ejecuciones ya dicen `Applied 0`.
-No rompe nada hoy porque todas las migraciones son idempotentes, pero cualquier
-migración futura no idempotente fallaría en la segunda ejecución. Por eso el test
-de «migrar otra vez» comprueba que los datos y las tablas sobreviven y **no**
-afirma `Applied 0`. Convendría abrir un issue para cualificar la tabla
-(`public.schema_migrations`).
+Estos tests destaparon que `migrate.ts` creaba `schema_migrations` sin cualificar.
+Con el rol `syncpad`, el `search_path` por defecto (`"$user", public`) resuelve
+`"$user"` al esquema `syncpad` en cuanto existe. La primera ejecución creaba la
+tabla en `public`; la segunda creaba **otra** `syncpad.schema_migrations` vacía,
+volvía a aplicar las ocho migraciones (idempotentes) y decía otra vez
+`Applied 8 migration(s)`. Se corrigió después cualificando la tabla como
+`public.schema_migrations`, y `migrations.int.test.ts` pasó a afirmar
+`Applied 0 migration(s)` en la segunda y la tercera ejecución. Detalle en la
+rama `fix/qualify-schema-migrations` y en [la nota del issue #4](004-migrations.md).
 
 ## Límites
 
