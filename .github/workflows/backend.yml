@@ -1,0 +1,185 @@
+name: Sync server
+
+# Runs on every pull request that touches the sync server, the shared package it depends on
+# (@syncpad/shared), the smoke script or this workflow. Needs no manual services: the workflow
+# starts its own throwaway PostgreSQL. Any failing step (a test, a migration, a convergence
+# check, the build or the container smoke test) fails the check.
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'shared/**'
+      - 'scripts/**'
+      - '.github/workflows/backend.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'shared/**'
+      - 'scripts/**'
+      - '.github/workflows/backend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, tests, migrations and PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Throwaway database for this job only; the credentials are not secrets.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: syncpad
+          POSTGRES_USER: syncpad
+          POSTGRES_PASSWORD: syncpad
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syncpad -d syncpad"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://syncpad:syncpad@127.0.0.1:5432/syncpad
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16'
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            backend/package-lock.json
+
+      - name: Install shared dependencies
+        run: npm ci
+        working-directory: shared
+
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: backend
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: backend
+
+      - name: Unit and WebSocket tests (in-memory store, includes restart convergence)
+        run: npm test
+        working-directory: backend
+
+      - name: Shared package tests
+        run: npx tsx --test ../shared/src/*.test.ts
+        working-directory: backend
+
+      # Compiles @syncpad/shared and the server, then starts dist/ the way `npm start` does.
+      - name: Build
+        run: npm run build
+        working-directory: backend
+
+      - name: Compiled entrypoint test
+        run: npm run test:built
+        working-directory: backend
+
+      # The migration CLI against the real database, from source and from the compiled output.
+      # A migration that fails to apply exits with 1 and stops the job.
+      - name: Apply migrations (source)
+        run: npm run migrate
+        working-directory: backend
+
+      - name: Apply migrations (compiled)
+        run: npm run migrate:built
+        working-directory: backend
+
+      # Full server against PostgreSQL: migrations, authorized and denied WebSocket connections,
+      # revoked access, note deletion, restart and snapshot reconstruction. Each test creates and
+      # drops its own database through DATABASE_URL. Skipped (npm --if-present) only while the
+      # script does not exist in the branch.
+      - name: PostgreSQL and WebSocket integration tests
+        run: npm run test:integration --if-present
+        working-directory: backend
+
+  image:
+    name: Container image smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: syncpad
+          POSTGRES_USER: syncpad
+          POSTGRES_PASSWORD: syncpad
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syncpad -d syncpad"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16'
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            backend/package-lock.json
+
+      - name: Build the image
+        run: docker build -f backend/Dockerfile -t syncpad-backend .
+
+      # Host networking lets the container reach the job's PostgreSQL service on 127.0.0.1:5432.
+      # The entrypoint applies the migrations before the server starts listening.
+      - name: Start the container
+        run: |
+          docker run -d --name syncpad-backend --network host \
+            -e DATABASE_URL=postgres://syncpad:syncpad@127.0.0.1:5432/syncpad \
+            -e CORS_ORIGIN=http://127.0.0.1:3000 \
+            -e COOKIE_SECURE=false \
+            -e PORT=3001 \
+            syncpad-backend
+          for attempt in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' syncpad-backend)
+            echo "attempt $attempt: $status"
+            [ "$status" = healthy ] && exit 0
+            [ "$status" = unhealthy ] && break
+            sleep 2
+          done
+          docker logs syncpad-backend
+          exit 1
+
+      - name: Install dependencies for the smoke script
+        run: |
+          npm ci --prefix shared
+          npm ci --prefix backend
+
+      # Two sessions open the same note over WebSocket; an edit from one must reach the other.
+      - name: Two-client edit through the container
+        run: npx tsx ../scripts/smoke-stack.mts
+        working-directory: backend
+
+      - name: Graceful shutdown
+        run: |
+          docker stop syncpad-backend
+          code=$(docker inspect --format '{{.State.ExitCode}}' syncpad-backend)
+          echo "exit code: $code"
+          [ "$code" = 0 ]
+
+      - name: Container logs
+        if: failure()
+        run: docker logs syncpad-backend || true
