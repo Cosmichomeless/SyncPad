@@ -66,3 +66,21 @@ export function createRandom(seed: number) {
     pick: <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)] as T,
   };
 }
+
+/** The relay a client reconnects to: it only ever merges, never resolves conflicts itself. */
+export function createServer(base?: Uint8Array): Peer {
+  return createPeer('server', base);
+}
+
+/** Real reconnection handshake: the client gets what it misses and uploads what the server misses. */
+export function reconnect(client: Peer, server: Peer) {
+  deliver(server, client);
+  deliver(client, server);
+}
+
+export function permutations<T>(items: readonly T[]): T[][] {
+  if (items.length <= 1) return [[...items]];
+  return items.flatMap((item, index) =>
+    permutations([...items.slice(0, index), ...items.slice(index + 1)]).map((rest) => [item, ...rest]),
+  );
+}
