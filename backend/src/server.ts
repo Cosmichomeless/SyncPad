@@ -31,6 +31,8 @@ type NoteRoom = {
   clients: Map<WebSocket, AwarenessUser>;
   /** Serializes snapshots and updates so a snapshot never overtakes an append in flight. */
   queue: Promise<void>;
+  /** Updates persisted through this room since the store was last asked for a snapshot. */
+  sinceSnapshotCheck: number;
 };
 
 function enqueue(room: NoteRoom, task: () => Promise<void>) {
@@ -39,6 +41,8 @@ function enqueue(room: NoteRoom, task: () => Promise<void>) {
   return run;
 }
 
+/** Stored updates a note accumulates before the store folds them into a snapshot. */
+const DEFAULT_SNAPSHOT_EVERY = 100;
 const MAX_REQUEST_ID_LENGTH = 128;
 const MAX_CURSOR_LENGTH = 256;
 
@@ -60,7 +64,7 @@ function decode(value: string) {
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
-export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number } = {}) {
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     const origin = req.headers.origin;
@@ -109,14 +113,24 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     res.writeHead(404).end();
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+  const snapshotEvery = Math.max(1, options.snapshotEvery ?? DEFAULT_SNAPSHOT_EVERY);
   const rooms = new Map<string, Promise<NoteRoom>>();
+  /** Asks the store to fold stored updates into a snapshot. Best effort: the update log stays authoritative. */
+  const scheduleSnapshot = (noteId: NoteId, room: NoteRoom) => {
+    const store = options.syncStore;
+    if (!store?.snapshot) return;
+    room.sinceSnapshotCheck = 0;
+    void enqueue(room, async () => { await store.snapshot!(noteId, snapshotEvery).catch(() => false); });
+  };
   const getRoom = (noteId: NoteId) => {
     let room = rooms.get(noteId);
     if (!room) {
       room = (async () => {
-        const created: NoteRoom = { document: createNoteDocument(), clients: new Map(), queue: Promise.resolve() };
+        const created: NoteRoom = { document: createNoteDocument(), clients: new Map(), queue: Promise.resolve(), sinceSnapshotCheck: 0 };
         if (options.syncStore) {
           for (const update of await options.syncStore.load(noteId)) applyNoteUpdate(created.document.doc, update);
+          // A long history left by a previous process is compacted into a snapshot on first load.
+          scheduleSnapshot(noteId, created);
         }
         return created;
       })();
@@ -211,6 +225,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
             }
           }
           applyNoteUpdate(room.document.doc, update);
+          if (options.syncStore && ++room.sinceSnapshotCheck >= snapshotEvery) scheduleSnapshot(noteId, room);
           const payload = JSON.stringify({ type: 'update', update: encoded });
           for (const [peer] of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
           if (!requestId) return;
