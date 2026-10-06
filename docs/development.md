@@ -1,27 +1,29 @@
-# SyncPad — Offline Collaborative Workspace
-   Proyecto experimental orientado a sistemas en tiempo real y sincronización distribuida.
-Objetivo:
-Crear un workspace de notas/documentos colaborativos tipo mini Notion/Google Docs que funcione en tiempo real y también offline.
-Stack previsto:
-- Next.js
-- React
-- TypeScript
-- WebSockets
-- IndexedDB
-- Yjs o CRDTs
-Conceptos a aprender:
-- WebSockets
-- Real-time systems
-- Optimistic UI
-- Offline-first
-- Eventual consistency
-- Sincronización
-- Distributed state
-- Conflict resolution
-- CRDTs
-- IndexedDB
-- Network failures
-Quiero entender realmente cómo se resuelven conflictos cuando dos clientes modifican información mientras alguno está offline.
+# Desarrollo local y notas por issue
+
+Referencia larga del proyecto, movida desde el README para que este sea una
+portada. Las notas están ordenadas por el issue que las introdujo; el detalle de
+cada decisión vive en [`docs/issues/`](issues/README.md) y la visión de conjunto
+en [`architecture.md`](architecture.md). Las secciones describen el estado en que
+se entregó cada issue; lo posterior se documenta en el issue correspondiente.
+
+## Puesta en marcha rápida
+
+Requisitos: Node.js 22.16 (rama 22), npm 10.9 y Docker.
+
+| Qué | Comando |
+| --- | --- |
+| Pila completa (PostgreSQL + backend + web) | `docker compose up --build` y abrir `http://127.0.0.1:3000` |
+| Solo PostgreSQL + migraciones + backend | `scripts/start-backend-local.sh` |
+| Frontend en desarrollo | `npm --prefix frontend run dev` |
+| Todas las comprobaciones estáticas y unitarias | `bash scripts/check.sh` |
+| Pruebas de integración con PostgreSQL | `DATABASE_URL=postgres://syncpad:syncpad@127.0.0.1:55432/syncpad npm --prefix backend run test:integration` |
+| Pruebas E2E con Playwright | `cd e2e && npx playwright test` (puertos 4000 y 4001 libres) |
+| Humo del despliegue | `sh scripts/smoke.sh` |
+| Regenerar las capturas del README | el comando está en la sección [Capturas](../README.md#capturas) del README |
+
+La web debe abrirse con el mismo origen que `CORS_ORIGIN` / `SYNCPAD_WEB_ORIGIN`
+(`127.0.0.1`, no `localhost`), o el backend rechaza CORS y el WebSocket. Las
+variables están en [`.env.example`](../.env.example).
 
 ## Frontend local
 
@@ -50,8 +52,9 @@ npm --prefix frontend run start
 
 ### Alcance y verificación de #1
 
-La issue #1 entrega la base del frontend y una portada informativa. No hay editor,
-autenticación, colaboración ni persistencia offline implementados todavía.
+La issue #1 entregó la base del frontend y una portada informativa; en ese momento
+no había editor, autenticación, colaboración ni persistencia offline. Todo eso llegó
+en los issues siguientes (véase el [índice](issues/README.md)).
 
 Verificado con Node 22.16.0 y npm 10.9.2: lint y typecheck sin errores, test de
 renderizado real (1/1), build estático correcto y typecheck posterior correcto.
