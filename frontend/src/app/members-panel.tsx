@@ -26,6 +26,8 @@ export type MembersViewProps = {
 
 const dateFormat = (iso: string) => new Date(iso).toLocaleDateString('es-ES');
 
+const MEMBERS_POLL_MS = 20_000;
+
 export function MembersView(props: MembersViewProps) {
   const { canManage, currentUserId, members, invitations, email, busy, error, createdLink, copied } = props;
   return (
@@ -107,6 +109,14 @@ export default function MembersPanel({ workspace, currentUserId }: { workspace: 
     void load();
     return () => { cancelled = true; };
   }, [base, canManage, version]);
+
+  // Other people join or leave while this tab is open: refresh when the tab regains focus and periodically.
+  useEffect(() => {
+    const reload = () => setVersion((value) => value + 1);
+    const timer = setInterval(() => { if (window.document.visibilityState === 'visible') reload(); }, MEMBERS_POLL_MS);
+    window.addEventListener('focus', reload);
+    return () => { clearInterval(timer); window.removeEventListener('focus', reload); };
+  }, []);
 
   async function act(operation: () => Promise<void>) {
     setBusy(true); setError('');
