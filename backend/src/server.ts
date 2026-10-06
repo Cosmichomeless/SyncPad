@@ -17,7 +17,7 @@ import { handleNoteRequest } from './note-http.js';
 import type { NoteService } from './notes.js';
 import { isNoteId } from './notes.js';
 import type { SyncStore } from './sync-store.js';
-import { createRateLimiter, DEFAULT_LIMITS, type SyncLimits } from './limits.js';
+import { createRateLimiter, DEFAULT_LIMITS, type LimitEvent, type SyncLimits } from './limits.js';
 
 function cookieValue(header: string | undefined, name: string) {
   return header?.split(';').map((part) => part.trim()).find((part) => part.startsWith(name + '='))?.slice(name.length + 1);
@@ -65,8 +65,9 @@ function decode(value: string) {
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
-export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number; limits?: Partial<SyncLimits> } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number; limits?: Partial<SyncLimits>; onLimit?: (event: LimitEvent) => void } = {}) {
   const limits: SyncLimits = { ...DEFAULT_LIMITS, ...options.limits };
+  const onLimit = (event: LimitEvent) => { try { options.onLimit?.(event); } catch { /* reporting must never break sync */ } };
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     const origin = req.headers.origin;
@@ -114,7 +115,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     }
     res.writeHead(404).end();
   });
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxMessageBytes, perMessageDeflate: false });
   const snapshotEvery = Math.max(1, options.snapshotEvery ?? DEFAULT_SNAPSHOT_EVERY);
   const rooms = new Map<string, Promise<NoteRoom>>();
   /** Asks the store to fold stored updates into a snapshot. Best effort: the update log stays authoritative. */
@@ -234,7 +235,13 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           stateVector: encode(encodeNoteStateVector(room.document.doc)),
         });
         const persistUpdate = async (room: NoteRoom, update: Uint8Array, encoded: string, requestId?: string) => {
-          assertValidNoteUpdate(room.document.doc, update);
+          const { contentLength } = assertValidNoteUpdate(room.document.doc, update);
+          // Only growth is refused, so a note already over a lowered limit can still be shortened.
+          if (contentLength > limits.maxNoteChars && contentLength > room.document.content.length) {
+            onLimit({ limit: 'note-size', noteId, chars: contentLength, max: limits.maxNoteChars });
+            send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: 'note-too-large', retryable: false });
+            return;
+          }
           if (options.syncStore) {
             try {
               await options.syncStore.append(noteId, update);
@@ -252,6 +259,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           if (options.syncStore) send({ type: 'ack', requestId });
           else send({ type: 'sync-error', requestId, code: 'persistence-unavailable', retryable: false });
         };
+        const awarenessAllowance = createRateLimiter(limits.awarenessPerSecond, limits.awarenessPerSecond * 2);
         const handle = async (room: NoteRoom, raw: WebSocket.RawData) => {
           let requestId: string | undefined;
           try {
@@ -268,6 +276,8 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
               const update = decode(message.update);
               await enqueue(room, () => persistUpdate(room, update, message.update, requestId));
             } else if (message.type === 'awareness') {
+              // Presence is ephemeral and chatty: over its own allowance it is dropped and the socket stays up.
+              if (!awarenessAllowance.take()) { onLimit({ limit: 'awareness-rate', noteId }); return; }
               // `cursor` absent keeps the current one (legacy ping); null clears it.
               if ('cursor' in message) participant.cursor = parseCursor(message.cursor);
               broadcastAwareness(room);
@@ -283,6 +293,12 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         // Listeners are attached before the room loads so an eager handshake is queued, not dropped.
         let ready: Promise<NoteRoom | undefined> = getRoom(noteId).then(async (room) => {
           if (closed) return undefined;
+          if (room.clients.size >= limits.maxClientsPerRoom) {
+            onLimit({ limit: 'room-full', noteId, max: limits.maxClientsPerRoom });
+            send({ type: 'sync-error', code: 'room-full', retryable: true });
+            client.close(1013, 'Room is full');
+            return undefined;
+          }
           room.clients.set(client, participant);
           await enqueue(room, async () => send(snapshot(room)));
           broadcastAwareness(room);
@@ -301,6 +317,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
         const allowance = createRateLimiter(limits.messagesPerSecond, limits.messageBurst);
         client.on('message', (raw) => {
           if (!allowance.take()) {
+            onLimit({ limit: 'rate', noteId });
             // Past its allowance the connection is cut before any work is queued; the client backs off and reconnects.
             if (client.readyState === client.OPEN) {
               client.send(JSON.stringify({ type: 'sync-error', code: 'rate-limited', retryable: true } satisfies ServerSyncMessage));

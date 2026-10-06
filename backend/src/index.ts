@@ -5,6 +5,7 @@ import { createSyncServer } from './server.js';
 import { loadSecurityConfig } from './security.js';
 import { createWorkspaceService } from './workspaces.js';
 import { createNoteService } from './notes.js';
+import { loadLimits } from './limits.js';
 import { createPostgresSyncStore, loadRetentionMs } from './sync-store.js';
 
 try {
@@ -18,6 +19,8 @@ try {
     workspaces: createWorkspaceService(database),
     notes: createNoteService(database),
     syncStore: createPostgresSyncStore(database, { retentionMs: loadRetentionMs(process.env) }),
+    limits: loadLimits(process.env),
+    onLimit: (event) => console.warn(JSON.stringify({ level: 'warn', msg: 'sync limit hit', ...event })),
   });
   const shutdown = () => {
     void app.close().then(() => database.end()).catch(() => {

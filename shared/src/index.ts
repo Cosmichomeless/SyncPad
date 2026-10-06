@@ -86,7 +86,7 @@ export type AwarenessUser = {
  * `incompatible-schema` is final for this build: the note uses a document schema version it cannot
  * read, so the client must stop syncing and keep its local copy untouched until it is updated.
  */
-export type SyncErrorCode = 'persistence-unavailable' | 'invalid-message' | 'note-deleted' | 'incompatible-schema' | 'rate-limited';
+export type SyncErrorCode = 'persistence-unavailable' | 'invalid-message' | 'note-deleted' | 'incompatible-schema' | 'rate-limited' | 'note-too-large' | 'room-full';
 
 /** Messages the server sends. `ack` is emitted only after the update is durably appended. */
 export type ServerSyncMessage =

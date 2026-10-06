@@ -76,12 +76,14 @@ export function applyNoteUpdate(doc: Y.Doc, update: Uint8Array) {
 /**
  * Checks that `update` applies cleanly on top of `doc` and keeps the note
  * schema valid, without touching `doc`. Used before an update is made durable.
+ * Returns the length the note's text would have, so callers can enforce a size limit.
  */
-export function assertValidNoteUpdate(doc: Y.Doc, update: Uint8Array) {
+export function assertValidNoteUpdate(doc: Y.Doc, update: Uint8Array): { contentLength: number } {
   const trial = new Y.Doc();
   try {
     Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
     applyNoteUpdate(trial, update);
+    return { contentLength: trial.getText(NOTE_CONTENT_NAME).length };
   } finally {
     trial.destroy();
   }
