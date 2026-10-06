@@ -167,11 +167,44 @@ button:disabled {
   justify-content: space-between;
 }
 
+.sync-status {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.sync-status p {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.sync-status small {
+  color: #5b6472;
+  flex-basis: 100%;
+  text-align: right;
+}
+
+.sync-status .retry {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.6rem;
+}
+
 .sync-dot {
   background: #d79a35;
   border-radius: 50%;
   height: 0.65rem;
   width: 0.65rem;
+}
+
+.sync-dot.sync-up-to-date {
+  background: #2f9e61;
+}
+
+.sync-dot.sync-offline {
+  background: #8b93a0;
 }
 
 .pending {

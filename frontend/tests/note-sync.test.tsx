@@ -344,3 +344,50 @@ test('destroy cancels timers and listeners, closes the socket and keeps the docu
   assert.equal(h.states.length, emitted);
   assert.equal(text(h.document), 'despues de destruir');
 });
+
+test('manual retry cancels the pending backoff instead of racing it', async () => {
+  const server = new FakeServer();
+  const h = harness({ server, timing: { initialDelayMs: 60, maxDelayMs: 60 } });
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  h.current().drop();
+  assert.equal(h.sockets.length, 1);
+  h.sync.retry();
+  assert.equal(h.sockets.length, 2);
+  await sleep(150);
+  assert.equal(h.sockets.length, 2, 'the cancelled backoff timer must not open a third socket');
+  h.sync.destroy();
+});
+
+test('a persistent failure keeps the text and a successful retry returns to up-to-date', async () => {
+  const server = new FakeServer();
+  const h = harness({ server });
+  applyLocalTextEdit(h.document, 'texto que no se borra');
+  h.current().open();
+  h.current().receive({ type: 'sync-error', requestId: h.current().sent[0].requestId, code: 'persistence-unavailable', retryable: false });
+  assert.equal(h.state(), 'offline');
+  assert.equal(text(h.document), 'texto que no se borra');
+  h.sync.retry();
+  assert.equal(text(h.document), 'texto que no se borra');
+  h.current().open();
+  await until(() => h.state() === 'up-to-date', 'up-to-date after retry');
+  assert.equal(server.text(), 'texto que no se borra');
+  h.sync.destroy();
+});
+
+test('an ack for an older upload never reports up-to-date while a newer edit is unsaved', async () => {
+  const server = new FakeServer();
+  server.holdAcks = true;
+  const h = harness({ server });
+  h.current().open();
+  await until(() => server.held.length === 1, 'handshake upload');
+  applyLocalTextEdit(h.document, 'edicion mas nueva');
+  server.releaseAcks();
+  await until(() => server.held.length === 1, 'second upload held');
+  assert.equal(h.state(), 'syncing');
+  assert.equal(h.pending[h.pending.length - 1], true);
+  server.holdAcks = false;
+  server.releaseAcks();
+  await until(() => h.state() === 'up-to-date', 'up-to-date');
+  h.sync.destroy();
+});

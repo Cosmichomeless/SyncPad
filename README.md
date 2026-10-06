@@ -346,3 +346,12 @@ durable en PostgreSQL, y el cliente solo se declara «al día» tras ese ack. Si
 falla el transporte se reintenta con backoff exponencial conservando el
 documento local. Detalle y evidencia en
 [docs/issues/028-reconnection.md](docs/issues/028-reconnection.md).
+
+## Estado de sincronización (#29)
+
+La cabecera de la nota muestra *Sin conexión*, *Reconectando*, *Sincronizando* o
+*Al día* en una única región accesible (`role="status"`), con un punto de color
+solo decorativo. «Al día» solo aparece tras el `ack` del servidor. Mientras no
+se esté al día hay un botón «Reintentar conexión» que no toca el documento local
+(deshabilitado, con motivo, si el navegador no tiene red). Detalle y evidencia en
+[docs/issues/029-sync-status.md](docs/issues/029-sync-status.md).

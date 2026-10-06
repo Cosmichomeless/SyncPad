@@ -20,7 +20,7 @@ await page.getByRole('button', { name: 'Crear', exact: true }).click();
 await page.getByLabel('Nueva nota').fill('Nota local');
 await page.getByRole('button', { name: 'Añadir' }).click();
 const editor = page.getByRole('textbox', { name: 'Contenido de la nota' });
-await page.waitForFunction(() => document.body.innerText.includes('Editando · al día'));
+await page.waitForFunction(() => document.querySelector('.sync-status p')?.textContent === 'Al día');
 await editor.fill('base conectada');
 
 // Second tab sees the connected edit (incremental update is forwarded)
@@ -38,7 +38,7 @@ await page.getByRole('button', { name: /Nota local/ }).click();
 await page.waitForFunction(() => document.querySelector('textarea') && !document.querySelector('textarea').disabled);
 await editor.pressSequentially(' + escrito sin red', { delay: 10 });
 out.textWhileOffline = await editor.inputValue();
-out.pendingShown = (await page.getByRole('status').filter({ hasText: 'pendientes de confirmar' }).count()) > 0;
+out.pendingShown = (await page.locator('.pending').filter({ hasText: 'pendientes de confirmar' }).count()) > 0;
 await page.waitForTimeout(500);
 await page.reload();
 await page.getByRole('button', { name: /Nota local/ }).click();

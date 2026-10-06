@@ -4,19 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyLocalTextEdit, createEditorDocument, type EditorDocument } from '../lib/note-document';
 import { createNoteSync, type NoteSyncHandle, type SyncState } from '../lib/note-sync';
+import NoteSyncStatus from './note-sync-status';
 import { persistNote } from '../lib/note-persistence';
 import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
 import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
-
-const SYNC_LABELS: Record<SyncState, string> = {
-  offline: 'sin conexión',
-  reconnecting: 'reconectando',
-  syncing: 'sincronizando',
-  'up-to-date': 'al día',
-};
 
 export default function Home() {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
@@ -33,6 +27,8 @@ export default function Home() {
   const [editorText, setEditorText] = useState('');
   const [editable, setEditable] = useState(false);
   const [pending, setPending] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [networkOnline, setNetworkOnline] = useState(true);
   const [syncState, setSyncState] = useState<SyncState>('offline');
   const documentRef = useRef<EditorDocument | null>(null);
   const syncRef = useRef<NoteSyncHandle | null>(null);
@@ -48,6 +44,7 @@ export default function Home() {
     setEditorText('');
     setEditable(false);
     setPending(false);
+    setSyncError('');
     setSyncState('offline');
     updateSelectedNote(note);
   }, []);
@@ -283,7 +280,7 @@ export default function Home() {
         url: `${WS_URL}?noteId=${noteId}`,
         onState: (state) => { if (current()) setSyncState(state); },
         onPending: (value) => { if (current()) setPending(value); },
-        onError: (message) => { if (current()) setError(message); },
+        onError: (message) => { if (current()) setSyncError(message); },
       });
       syncRef.current = sync;
     }).catch(() => {
@@ -301,6 +298,19 @@ export default function Home() {
       );
     };
   }, [userId, noteId, cacheFailure]);
+
+  useEffect(() => {
+    const update = () => setNetworkOnline(navigator.onLine);
+    update();
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => { window.removeEventListener('online', update); window.removeEventListener('offline', update); };
+  }, []);
+
+  const retrySync = useCallback(() => {
+    setSyncError('');
+    syncRef.current?.retry();
+  }, []);
 
   function editContent(value: string) {
     const identity = identityRef.current;
@@ -341,7 +351,7 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       <section className="workspace-grid">
         <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form></aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {SYNC_LABELS[syncState]}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={SYNC_LABELS[syncState]} /></div>{pending && <p className="pending" role="status">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}<textarea aria-label="Contenido de la nota" disabled={!editable} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando</p><h3>{selectedNote.title}</h3></div><NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} /></div>{pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );
