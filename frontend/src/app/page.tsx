@@ -57,6 +57,9 @@ export default function Home() {
   const deletedIdsRef = useRef(new Set<string>());
   const documentRef = useRef<EditorDocument | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const linkButtonRef = useRef<HTMLButtonElement | null>(null);
+  /** Set when the person opens a note on purpose: focus moves to its editor once it can take it. */
+  const focusEditorRef = useRef(false);
   const syncRef = useRef<NoteSyncHandle | null>(null);
   const awarenessRef = useRef<{ users: AwarenessUser[]; self: string | null }>({ users: [], self: null });
   const cursorTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -337,7 +340,7 @@ export default function Home() {
       const rows = await selectWorkspace(workspace, true);
       if (!isCurrentIdentity(identity) || navigationRef.current !== selection + 1) return;
       const note = rows?.find(row => row.id === result.note.id);
-      if (note) setSelectedNote(note);
+      if (note) openNote(note);
     }
     catch (cause) {
       if (isCurrentIdentity(identity) && shouldHandleRequestFailure(cause, navigationRef.current === selection))
@@ -462,10 +465,22 @@ export default function Home() {
     syncRef.current?.retry();
   }, []);
 
-  function openOrphan(note: NoteSummary) {
-    deletedIdsRef.current.add(note.id);
+  function openNote(note: NoteSummary) {
+    focusEditorRef.current = true;
     setSelectedNote(note);
   }
+
+  function openOrphan(note: NoteSummary) {
+    deletedIdsRef.current.add(note.id);
+    openNote(note);
+  }
+
+  useEffect(() => {
+    if (!focusEditorRef.current || !(editable || deleted || incompatible)) return;
+    const element = textareaRef.current;
+    element?.focus();
+    if (element && window.document.activeElement === element) focusEditorRef.current = false;
+  }, [editable, deleted, incompatible, noteId]);
 
   function downloadLocalCopy() {
     const note = noteRef.current;
@@ -554,7 +569,13 @@ export default function Home() {
 
   function submitLink() {
     const applied = formatSelection((document, start, end) => setLink(document, start, end, linkUrl), 'Escribe una dirección http(s):// o mailto: y selecciona el texto del enlace.');
-    if (applied) { setLinkOpen(false); setLinkUrl(''); }
+    if (applied) { setLinkOpen(false); setLinkUrl(''); textareaRef.current?.focus(); }
+  }
+
+  /** Escape closes the link form and returns to the button that opened it. */
+  function closeLink() {
+    setLinkOpen(false);
+    linkButtonRef.current?.focus();
   }
 
   async function logout() {
@@ -569,7 +590,7 @@ export default function Home() {
   }
 
   if (!user) return (
-    <main className="shell auth-shell">
+    <main id="principal" tabIndex={-1} className="shell auth-shell">
       <p className="eyebrow">SyncPad · acceso local</p>
       <h1>Tu espacio de notas.</h1>
       <p className="lead">Crea workspaces, guarda sus notas y prepara el terreno para la colaboración en tiempo real.</p>
@@ -584,13 +605,13 @@ export default function Home() {
   );
 
   return (
-    <main className="shell workspace-shell">
+    <main id="principal" tabIndex={-1} className="shell workspace-shell">
       <header className="topbar"><div><p className="eyebrow">Workspace privado</p><h1>SyncPad</h1></div><button className="quiet" onClick={() => void logout()}>Salir</button></header>
       <p className="welcome">{user.email}</p>
       {invite && <div className="invite-banner" role="region" aria-label="Invitación recibida"><p><strong>Has recibido una invitación a un workspace.</strong> Solo funciona con la cuenta del email invitado y se puede usar una vez.</p><div className="actions"><button type="button" disabled={busy} onClick={() => void acceptInvite()}>Aceptar invitación</button><button type="button" className="quiet" onClick={dismissInvite}>Descartar</button></div>{inviteError && <p className="error" role="alert">{inviteError}</p>}</div>}
       <section className="workspace-grid">
-        <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} aria-current={selectedWorkspace?.id === workspace.id ? 'true' : undefined} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form>{selectedWorkspace && <MembersPanel key={selectedWorkspace.id} workspace={selectedWorkspace} currentUserId={user.id} />}</aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} aria-current={selectedNote?.id === note.id ? 'true' : undefined} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small className={unsentIds.has(note.id) ? 'note-unsent' : undefined}>{noteStatusLabel({ active: selectedNote?.id === note.id, syncState, unsent: unsentIds.has(note.id), deleted: deleted && selectedNote?.id === note.id, fallback: `Actualizada ${new Date(note.updatedAt).toLocaleDateString('es-ES')}` })}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} aria-current={selectedNote?.id === note.id ? 'true' : undefined} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3>{selectedNote.title}</h3></div>{!deleted && !incompatible && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{incompatible && <div className="incompatible-note" role="alert"><p><strong>Esta nota usa un formato más nuevo que esta versión de SyncPad.</strong> {incompatible === 'local' ? 'La copia de este dispositivo no se ha abierto ni modificado.' : 'Se ha dejado de sincronizar y no se ha aplicado nada del servidor.'} Recarga la aplicación para actualizarla; no se ha perdido nada.{incompatible === 'remote' && pending && ' Tus últimos cambios siguen guardados solo en este dispositivo.'}</p>{incompatible === 'remote' && <div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button></div>}</div>}{!deleted && !incompatible && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}{!deleted && !incompatible && <PresenceBar participants={participants} selections={selections} />}{!deleted && !incompatible && <div className="format-toolbar" role="toolbar" aria-label="Formato" onMouseDown={(event) => { if ((event.target as HTMLElement).tagName !== 'INPUT') event.preventDefault(); }}><button type="button" disabled={!editable} onClick={() => formatSelection(toggleBold)} aria-label="Negrita"><strong>N</strong></button><button type="button" disabled={!editable} onClick={() => formatSelection((document, start, end) => toggleList(document, start, end))} aria-label="Lista">• Lista</button><button type="button" disabled={!editable} aria-expanded={linkOpen} onClick={() => setLinkOpen(open => !open)} aria-label="Enlace">Enlace</button><button type="button" disabled={!editable} onClick={() => formatSelection(removeLink)} aria-label="Quitar enlace">Quitar enlace</button></div>}{linkOpen && !deleted && !incompatible && <form className="link-form" onSubmit={(event) => { event.preventDefault(); submitLink(); }}><input aria-label="Dirección del enlace" type="url" placeholder="https://" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} /><button type="submit">Aplicar enlace</button></form>}{formatError && <p className="format-hint" role="status">{formatError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable && !deleted && !incompatible} readOnly={deleted || incompatible !== null} value={editorText} onChange={(event) => editContent(event.target.value)} onKeyDown={historyKey} onSelect={(event) => shareCursor(event.currentTarget)} onBlur={() => shareCursor(null)} ref={bindHistoryInput} placeholder="Escribe el contenido de la nota..." />{editorText && <RichPreview blocks={blocks} />}</article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <aside className="panel sidebar" aria-label="Workspaces"><h2>Workspaces</h2><div className="stack" role="group" aria-label="Lista de workspaces">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} aria-current={selectedWorkspace?.id === workspace.id ? 'true' : undefined} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form>{selectedWorkspace && <MembersPanel key={selectedWorkspace.id} workspace={selectedWorkspace} currentUserId={user.id} />}</aside>
+        <section className="panel notes-panel" aria-label="Notas"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list" role="group" aria-label="Lista de notas">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} aria-current={selectedNote?.id === note.id ? 'true' : undefined} onClick={() => { if (selectedNote !== note) openNote(note); }}><strong>{note.title}</strong><small className={unsentIds.has(note.id) ? 'note-unsent' : undefined}>{noteStatusLabel({ active: selectedNote?.id === note.id, syncState, unsent: unsentIds.has(note.id), deleted: deleted && selectedNote?.id === note.id, fallback: `Actualizada ${new Date(note.updatedAt).toLocaleDateString('es-ES')}` })}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list" role="group" aria-label="Notas eliminadas en el servidor"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} aria-current={selectedNote?.id === note.id ? 'true' : undefined} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3 id="editor-title">{selectedNote.title}</h3></div>{!deleted && !incompatible && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{incompatible && <div className="incompatible-note" role="alert"><p><strong>Esta nota usa un formato más nuevo que esta versión de SyncPad.</strong> {incompatible === 'local' ? 'La copia de este dispositivo no se ha abierto ni modificado.' : 'Se ha dejado de sincronizar y no se ha aplicado nada del servidor.'} Recarga la aplicación para actualizarla; no se ha perdido nada.{incompatible === 'remote' && pending && ' Tus últimos cambios siguen guardados solo en este dispositivo.'}</p>{incompatible === 'remote' && <div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button></div>}</div>}{!deleted && !incompatible && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}{!deleted && !incompatible && <PresenceBar participants={participants} selections={selections} />}{!deleted && !incompatible && <div className="format-toolbar" role="toolbar" aria-label="Formato" onMouseDown={(event) => { if ((event.target as HTMLElement).tagName !== 'INPUT') event.preventDefault(); }}><button type="button" disabled={!editable} onClick={() => formatSelection(toggleBold)} aria-label="Negrita"><strong>N</strong></button><button type="button" disabled={!editable} onClick={() => formatSelection((document, start, end) => toggleList(document, start, end))} aria-label="Lista">• Lista</button><button type="button" ref={linkButtonRef} disabled={!editable} aria-expanded={linkOpen} aria-controls={linkOpen ? 'link-form' : undefined} onClick={() => setLinkOpen(open => !open)} aria-label="Enlace">Enlace</button><button type="button" disabled={!editable} onClick={() => formatSelection(removeLink)} aria-label="Quitar enlace">Quitar enlace</button></div>}{linkOpen && !deleted && !incompatible && <form id="link-form" className="link-form" onSubmit={(event) => { event.preventDefault(); submitLink(); }} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); closeLink(); } }}><input aria-label="Dirección del enlace" autoFocus type="url" placeholder="https://" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} /><button type="submit">Aplicar enlace</button></form>}{formatError && <p className="format-hint" role="status">{formatError}</p>}<textarea aria-label="Contenido de la nota" aria-describedby="editor-title" disabled={!editable && !deleted && !incompatible} readOnly={deleted || incompatible !== null} value={editorText} onChange={(event) => editContent(event.target.value)} onKeyDown={historyKey} onSelect={(event) => shareCursor(event.currentTarget)} onBlur={() => shareCursor(null)} ref={bindHistoryInput} placeholder="Escribe el contenido de la nota..." />{editorText && <RichPreview blocks={blocks} />}</article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );

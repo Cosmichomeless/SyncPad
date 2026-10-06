@@ -13,6 +13,46 @@ body {
   margin: 0;
 }
 
+/* Keyboard focus is always visible and never relies on the browser default alone. */
+:focus-visible {
+  outline: 3px solid #0b4f59;
+  outline-offset: 2px;
+}
+
+button:focus-visible {
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.sr-only {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.skip-link {
+  background: #172c3b;
+  color: #fff;
+  left: 0.5rem;
+  padding: 0.6rem 1rem;
+  position: absolute;
+  top: -4rem;
+  z-index: 10;
+}
+
+.skip-link:focus {
+  top: 0.5rem;
+}
+
+main:focus {
+  outline: none;
+}
+
 .shell {
   max-width: 48rem;
   margin: 0 auto;
@@ -140,13 +180,13 @@ button:disabled {
 }
 
 .note-card small {
-  color: #6d7d85;
+  color: #4b5a63;
   font-weight: 400;
 }
 
 .empty {
   border: 1px dashed #b8c8d0;
-  color: #62727a;
+  color: #4b5a63;
   padding: 1rem;
 }
 

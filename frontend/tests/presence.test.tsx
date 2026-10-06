@@ -3,7 +3,7 @@ import test from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import * as Y from 'yjs';
 import type { AwarenessUser } from '@syncpad/shared';
-import PresenceBar from '../src/app/presence-bar';
+import PresenceBar, { summary } from '../src/app/presence-bar';
 import { colorFor, encodeCursor, groupParticipants, remoteSelections, resolveCursor } from '../src/lib/presence';
 
 const user = (connectionId: string, userId: string, email: string, cursor?: AwarenessUser['cursor']): AwarenessUser => ({ connectionId, userId, email, cursor });
@@ -83,4 +83,20 @@ test('PresenceBar renders names and selections as text, escaping hostile input',
   assert.ok(html.includes('(tú)') && html.includes('2 pestañas'));
   assert.ok(html.includes('aria-label="Participantes conectados"'));
   assert.equal(renderToStaticMarkup(<PresenceBar participants={[]} selections={[]} />), '');
+});
+
+test('presence has an accessible text: a polite live summary and a caret that is read as text (#56)', () => {
+  const participants = [
+    { userId: 'u1', email: 'me@example.com', name: 'me', color: 'hsl(1 65% 38%)', isSelf: true, connections: 1 },
+    { userId: 'u2', email: 'ana@example.com', name: 'ana', color: 'hsl(2 65% 38%)', isSelf: false, connections: 1 },
+  ];
+  const html = renderToStaticMarkup(
+    <PresenceBar participants={participants} selections={[{ userId: 'u2', connectionId: 'c2', name: 'ana', color: 'hsl(2 65% 38%)', before: 'a', selected: '', after: 'b' }]} />,
+  );
+  assert.match(html, /<p class="sr-only" role="status" aria-live="polite" aria-atomic="true">2 participantes conectados: me \(tú\), ana<\/p>/);
+  assert.equal(html.match(/role="status"/g)?.length, 1);
+  // aria-label on a plain span is not exposed reliably; the caret must be real hidden text instead.
+  assert.ok(!html.includes('aria-label="cursor"'));
+  assert.match(html, /<span aria-hidden="true">\|<\/span><span class="sr-only"> cursor <\/span>/);
+  assert.equal(summary([participants[0]]), '1 participante conectado: me (tú)');
 });

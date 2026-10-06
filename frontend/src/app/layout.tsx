@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es">
-      <body>{children}<ServiceWorkerRegistration /></body>
+      <body><a className="skip-link" href="#principal">Saltar al contenido</a>{children}<ServiceWorkerRegistration /></body>
     </html>
   );
 }
