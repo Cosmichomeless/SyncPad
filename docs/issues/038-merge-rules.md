@@ -54,8 +54,12 @@ cd backend && SYNC_SEED=<semilla> npx tsx --test ../shared/src/scenarios.test.ts
   `backend/tests/ws-auth.test.ts`, `access-isolation.test.ts`).
 - Perder el acceso es indistinguible de un borrado para el cliente (`403`), y la
   copia local se conserva (#34).
-- **Límite conocido:** el permiso se comprueba al abrir la conexión; recomprobarlo
-  en cada update de una sesión ya abierta queda para #51.
+- El permiso también se **recomprueba en las sesiones ya abiertas** (#51,
+  [`051-ws-permissions.md`](051-ws-permissions.md)): antes de procesar un mensaje
+  si la última comprobación es más antigua que `SYNC_PERMISSION_RECHECK_MS`
+  (defecto 5 s) y en un barrido periódico que alcanza a las conexiones en silencio.
+  Quien pierde el acceso recibe el cierre `4403` y sus updates posteriores no se
+  guardan (`backend/integration/ws-access.int.test.ts`).
 
 ### Cambios de esquema
 
@@ -74,5 +78,6 @@ cd backend && SYNC_SEED=<semilla> npx tsx --test ../shared/src/scenarios.test.ts
   «transacciones» entre notas.
 - Las propiedades de #37 modelan el protocolo de diff, no la red real; las
   ráfagas y los clientes obsoletos son #47.
-- Estas garantías valen para texto plano. El texto enriquecido (#39) añadirá
-  marcas y estructura con sus propias reglas, que se documentarán allí.
+- Las marcas del texto enriquecido (#39) se fusionan como los caracteres, pero solo
+  se admiten negrita y enlaces válidos: el servidor rechaza el resto (#54,
+  [`039-rich-text.md`](039-rich-text.md), [`054-sanitize-rich-text.md`](054-sanitize-rich-text.md)).
