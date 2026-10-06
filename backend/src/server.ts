@@ -51,6 +51,7 @@ function enqueue(room: NoteRoom, task: () => Promise<void>) {
 /** Stored updates a note accumulates before the store folds them into a snapshot. */
 const DEFAULT_SNAPSHOT_EVERY = 100;
 const MAX_REQUEST_ID_LENGTH = 128;
+const CLIENT_MESSAGE_TYPES: ReadonlySet<unknown> = new Set<ClientSyncMessage['type']>(['sync-request', 'update', 'awareness']);
 const MAX_CURSOR_LENGTH = 256;
 
 /** A cursor is two short base64 strings or nothing; anything else is a malformed message. */
@@ -375,6 +376,8 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           let requestId: string | undefined;
           try {
             const message = JSON.parse(raw.toString()) as ClientSyncMessage;
+            // A frame that is not an object of a known type is noise or an attack, never a message to skip quietly.
+            if (typeof message !== 'object' || message === null || Array.isArray(message) || !CLIENT_MESSAGE_TYPES.has(message.type)) throw new Error('unknown message');
             if ('requestId' in message && message.requestId !== undefined) {
               if (typeof message.requestId !== 'string' || message.requestId.length > MAX_REQUEST_ID_LENGTH) throw new Error('invalid requestId');
               requestId = message.requestId;
