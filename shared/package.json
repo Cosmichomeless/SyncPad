@@ -7,11 +7,18 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
+      "syncpad-built": "./dist/index.js",
       "import": "./src/index.ts",
       "default": "./src/index.ts"
     }
   },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
   "dependencies": {
     "yjs": "13.6.27"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
   }
 }

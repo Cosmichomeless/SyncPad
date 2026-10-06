@@ -31,6 +31,7 @@ export async function handleNoteRequest(
   response: ServerResponse,
   auth: AuthService,
   notes: NoteService,
+  onNoteDeleted: (noteId: string) => Promise<void> | void = () => {},
 ) {
   const path = request.url?.split('?')[0] ?? '';
   if (!path.startsWith('/workspaces/') && !path.startsWith('/notes/')) return false;
@@ -90,7 +91,11 @@ export async function handleNoteRequest(
         return true;
       }
       if (!(await notes.delete(user.id, parts[1]))) sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Note not found' } });
-      else response.writeHead(204).end();
+      else {
+        // The row and its persisted updates are already gone; now cut off live collaborators.
+        await onNoteDeleted(parts[1]);
+        response.writeHead(204).end();
+      }
       return true;
     }
   }

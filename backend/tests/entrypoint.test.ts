@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 import WebSocket from 'ws';
 
+// With SYNCPAD_TEST_BUILT=1 (npm run test:built, after npm run build) the test runs the compiled
+// server with exactly the arguments of `npm start`, so a packaging defect in dist/ or in
+// @syncpad/shared (#59) fails here instead of in the container.
+const startScript = (JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: { start: string } }).scripts.start;
 const entry = process.env.SYNCPAD_TEST_BUILT === '1'
-  ? ['dist/index.js'] : ['--import', 'tsx', 'src/index.ts'];
+  ? startScript.replace(/^node /, '').split(' ') : ['--import', 'tsx', 'src/index.ts'];
 
 test('executable serves HTTP/WS and exits cleanly on SIGTERM', { timeout: 6000 }, async (t) => {
   const reservation = createServer();

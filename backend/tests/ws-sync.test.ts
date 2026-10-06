@@ -16,7 +16,7 @@ async function fixture() {
     async authenticate() { return { id: 'user-1' as never, email: 'person@example.com' }; },
     async createSession() { return 'session-token'; },
     async getUserBySession(token) { return token === 'session-token' ? { id: 'user-1' as never, email: 'person@example.com' } : null; },
-    async invalidateSession() {},
+    async invalidateSession() { },
   };
   const notes: NoteService = {
     async create() { return null; }, async listForUser() { return []; }, async rename() { return null; }, async delete() { return false; },

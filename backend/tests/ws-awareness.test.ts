@@ -53,3 +53,70 @@ test('awareness broadcasts joins and removes disconnected participants', { timeo
   assert.equal((await left).users.length, 1);
   first.terminate();
 });
+type Presence = { users: Array<{ connectionId: string; userId: string; cursor?: { anchor: string; head: string } | null }>; self: string };
+
+function nextAwareness(client: WebSocket, accept: (message: Presence) => boolean = () => true) {
+  return new Promise<Presence>((resolve) => {
+    const onMessage = (raw: WebSocket.RawData) => {
+      const message = JSON.parse(raw.toString()) as { type: string } & Presence;
+      if (message.type === 'awareness' && accept(message)) { client.off('message', onMessage); resolve(message); }
+    };
+    client.on('message', onMessage);
+  });
+}
+
+test('awareness relays ephemeral cursors, tells each client who it is, and drops them on disconnect', { timeout: 4000 }, async (t) => {
+  const { app, port } = await fixture();
+  t.after(() => app.close());
+  const headers = { origin: 'http://127.0.0.1:3000' };
+  const first = new WebSocket(roomUrl(port), { headers: { ...headers, cookie: 'syncpad_session=one' } });
+  const firstJoined = nextAwareness(first);
+  await once(first, 'open');
+  const alone = await firstJoined;
+  assert.equal(alone.users.length, 1);
+  assert.equal(alone.self, alone.users[0].connectionId);
+
+  const second = new WebSocket(roomUrl(port), { headers: { ...headers, cookie: 'syncpad_session=two' } });
+  const secondJoined = nextAwareness(second);
+  await once(second, 'open');
+  const together = await secondJoined;
+  assert.equal(together.users.length, 2);
+  assert.notEqual(together.self, alone.self, 'each connection receives its own id');
+  assert.equal(together.users.find((user) => user.connectionId === together.self)?.userId, 'two');
+
+  const cursor = { anchor: 'AQID', head: 'AQIE' };
+  const seen = nextAwareness(first, (message) => message.users.some((user) => user.cursor));
+  second.send(JSON.stringify({ type: 'awareness', cursor }));
+  const withCursor = await seen;
+  assert.deepEqual(withCursor.users.find((user) => user.userId === 'two')?.cursor, cursor);
+  assert.equal(withCursor.users.find((user) => user.userId === 'one')?.cursor ?? null, null);
+
+  // A ping without `cursor` keeps it; null clears it.
+  const kept = nextAwareness(first);
+  second.send(JSON.stringify({ type: 'awareness' }));
+  assert.deepEqual((await kept).users.find((user) => user.userId === 'two')?.cursor, cursor);
+  const cleared = nextAwareness(first);
+  second.send(JSON.stringify({ type: 'awareness', cursor: null }));
+  assert.equal((await cleared).users.find((user) => user.userId === 'two')?.cursor ?? null, null);
+
+  const left = nextAwareness(first);
+  second.close();
+  assert.equal((await left).users.length, 1);
+  first.terminate();
+});
+
+test('a malformed cursor is rejected without poisoning the room', { timeout: 4000 }, async (t) => {
+  const { app, port } = await fixture();
+  t.after(() => app.close());
+  const headers = { origin: 'http://127.0.0.1:3000' };
+  for (const bad of [{ anchor: 'x', head: 5 }, 'text', { anchor: '<script>', head: 'AQID' }, { anchor: 'A'.repeat(300), head: 'AQID' }, { anchor: '', head: 'AQID' }]) {
+    const client = new WebSocket(roomUrl(port), { headers: { ...headers, cookie: 'syncpad_session=one' } });
+    const joined = nextAwareness(client);
+    await once(client, 'open');
+    await joined;
+    const closed = once(client, 'close');
+    client.send(JSON.stringify({ type: 'awareness', cursor: bad }));
+    const [code] = await closed;
+    assert.equal(code, 1003, `rejected ${JSON.stringify(bad).slice(0, 30)}`);
+  }
+});

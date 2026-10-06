@@ -1,0 +1,86 @@
+name: Frontend
+
+# Runs on every pull request that touches the web app, the shared package it compiles
+# (@syncpad/shared), the sync server (frontend/tests/server-recovery.test.tsx starts the real
+# server in-process and `tsc` type-checks it) or this workflow. Mirrors the frontend half of
+# scripts/check.sh plus a production build. Any failing step fails the check.
+on:
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'shared/**'
+      - 'backend/**'
+      - '.github/workflows/frontend.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'shared/**'
+      - 'backend/**'
+      - '.github/workflows/frontend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  checks:
+    name: Lint, typecheck, test and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16'
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      # @syncpad/shared is linked from ../shared and imports yjs, which is installed in shared/.
+      - name: Install shared dependencies
+        run: npm ci
+        working-directory: shared
+
+      # frontend/tests import the sync server from ../../backend (src and node_modules).
+      - name: Install backend dependencies
+        run: npm ci
+        working-directory: backend
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Lint
+        run: npm run lint
+        working-directory: frontend
+
+      - name: Typecheck
+        run: npm run typecheck
+        working-directory: frontend
+
+      - name: Test
+        run: npm test
+        working-directory: frontend
+
+      - name: Cache Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json', 'shared/package-lock.json', 'backend/package-lock.json') }}-${{ hashFiles('frontend/src/**', 'frontend/next.config.ts', 'shared/src/**') }}
+          restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json', 'shared/package-lock.json', 'backend/package-lock.json') }}-
+
+      - name: Build
+        run: npm run build
+        working-directory: frontend

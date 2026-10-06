@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { IDBDatabase, IDBObjectStore } from 'fake-indexeddb';
 import * as Y from 'yjs';
-import { createEditorDocument } from '../src/lib/note-document';
-import { noteStorageKey, persistNote } from '../src/lib/note-persistence';
+import { createEditorDocument, NoteSchemaError } from '../src/lib/note-document';
+import { deleteLocalNote, noteStorageKey, persistNote } from '../src/lib/note-persistence';
 
 test('restores a visited note without network', async () => {
   const first = createEditorDocument();
@@ -292,4 +292,52 @@ test('reads the existing y-indexeddb version-one updates schema', async () => {
   });
   document.doc.destroy();
   assert.equal(await restore('legacy-user', 'legacy-note'), 'Legacy content');
+});
+
+test('discarding a deleted note erases only that note\'s local copy', async () => {
+  await save('discard-user', 'gone-note', 'texto sin sincronizar');
+  await save('discard-user', 'kept-note', 'otra nota');
+  await deleteLocalNote('discard-user', 'gone-note');
+  assert.equal(await restore('discard-user', 'gone-note'), '');
+  assert.equal(await restore('discard-user', 'kept-note'), 'otra nota');
+});
+
+test('a local copy written by a newer schema is refused without being read, applied or rewritten', async () => {
+  const future = new Y.Doc();
+  future.getMap<unknown>('note').set('schemaVersion', 2);
+  future.getText('content').insert(0, 'formato nuevo');
+  const stored = Y.encodeStateAsUpdate(future);
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open(noteStorageKey('future-user', 'future-note'));
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore('updates', { autoIncrement: true });
+      request.result.createObjectStore('custom');
+    };
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const transaction = request.result.transaction('updates', 'readwrite');
+      transaction.objectStore('updates').add(stored);
+      transaction.oncomplete = () => { request.result.close(); resolve(); };
+      transaction.onabort = () => reject(transaction.error);
+    };
+  });
+
+  const document = createEditorDocument();
+  const persistence = persistNote('future-user', 'future-note', document.doc);
+  await assert.rejects(persistence.whenSynced, (error) => error instanceof NoteSchemaError && error.found === 2);
+  assert.equal(document.content.toString(), '', 'nothing from the newer copy was applied');
+  document.content.insert(0, 'edición que no debe guardarse');
+  await persistence.destroy();
+  document.doc.destroy();
+
+  const rows = await new Promise<Uint8Array[]>((resolve, reject) => {
+    const request = indexedDB.open(noteStorageKey('future-user', 'future-note'));
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const read = request.result.transaction('updates').objectStore('updates').getAll();
+      read.onsuccess = () => { request.result.close(); resolve(read.result as Uint8Array[]); };
+    };
+  });
+  assert.equal(rows.length, 1, 'the stored copy is exactly what the newer editor left');
+  assert.deepEqual(new Uint8Array(rows[0]), stored);
 });

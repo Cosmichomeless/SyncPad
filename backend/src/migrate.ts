@@ -12,13 +12,15 @@ export async function runMigrations(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Always `public.`: once migration 001 creates the `syncpad` schema, an unqualified name resolves
+    // to it through the `"$user"` search_path of the `syncpad` role and a second table is created.
     await client.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
+      CREATE TABLE IF NOT EXISTS public.schema_migrations (
         version text PRIMARY KEY,
         applied_at timestamptz NOT NULL DEFAULT now()
       )
     `);
-    const applied = await client.query<{ version: string }>('SELECT version FROM schema_migrations');
+    const applied = await client.query<{ version: string }>('SELECT version FROM public.schema_migrations');
     const appliedVersions = new Set(applied.rows.map((row) => row.version));
     const files = (await readdir(migrationDirectory))
       .filter((file) => file.endsWith('.sql'))
@@ -27,7 +29,7 @@ export async function runMigrations(
       if (appliedVersions.has(file)) continue;
       const sql = await readFile(resolve(migrationDirectory, file), 'utf8');
       await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
+      await client.query('INSERT INTO public.schema_migrations (version) VALUES ($1)', [file]);
     }
     await client.query('COMMIT');
     return files.length - appliedVersions.size;

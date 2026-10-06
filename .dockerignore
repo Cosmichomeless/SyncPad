@@ -1,0 +1,25 @@
+# The build context is the repository root. Only what an image needs gets in:
+# no secrets, no local data, no build output of the host.
+.git
+.github
+.claude
+.env
+.env.*
+!.env.example
+**/node_modules
+**/.next
+**/dist
+**/coverage
+**/*.log
+**/*.tsbuildinfo
+frontend/public/sw.js
+frontend/public/offline-shell.html
+e2e
+docs
+plans
+reports
+README.md
+LICENSE
+**/Dockerfile
+docker-compose*.yml
+.dockerignore

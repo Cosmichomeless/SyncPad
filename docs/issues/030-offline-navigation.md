@@ -1,0 +1,134 @@
+# #30 — Identidad local y navegación offline por usuario
+
+## Alcance implementado
+
+- `api-request.ts` separa rechazos de transporte (`NetworkError`) de errores
+  HTTP (`HttpError` con status). Un 401/403/404/500 conserva su clasificación
+  aunque el cuerpo no sea JSON. El rechazo de CSRF impide enviar la mutación.
+  Las peticiones usan cookies del navegador y `cache: no-store`; no se
+  almacenan respuestas HTTP privadas, contraseñas ni tokens.
+- `offline-session.ts` guarda exclusivamente ID/email y una generación en
+  localStorage. Logout reemplaza la identidad por un registro bloqueado;
+  `/auth/me` no lo desbloquea. Solo login/registro explícito puede hacerlo.
+  Los snapshots de generación protegen respuestas de autenticación tardías;
+  los eventos storage invalidan la UI de otras pestañas.
+- `offline-metadata.ts` usa IndexedDB nativo con stores workspaces, notes y
+  visited; las claves de listas/visitas son tuplas de usuario/workspace/nota.
+  `null` indica caché ausente, `[]` un listado vacío conocido. Las transacciones
+  esperan complete/error/abort, revalidan la generación antes del commit y
+  rechazan escrituras obsoletas. Los listados autorizados purgan metadata y
+  visitas de recursos eliminados; una hidratación tardía no vuelve a marcar
+  una nota que ya no está autorizada en el listado.
+- La portada valida primero la sesión por red. Solo `NetworkError` permite
+  recuperar identidad/listados locales; offline muestra únicamente notas
+  visitadas. La marca de visita se confirma tras hidratar Yjs, antes de
+  publicar contenido/conectar el socket. La selección de notas recién creadas
+  también espera el listado persistido.
+- Logout limpia inmediatamente usuario, listados, selección y contenido, cierra
+  el socket y después intenta revocación remota. Si no hay red, explica en
+  español que la sesión local está cerrada pero la remota no pudo revocarse.
+- El evento online revalida identidad y refresca resúmenes conservando IDs
+  seleccionados. No sustituye el documento Yjs: su efecto depende de ID de
+  usuario y nota, no de la identidad del objeto resumen. Un 401 bloquea toda
+  la UI privada; 403/404 de recurso elimina la selección y su metadata.
+  Fallos al persistir/purgar metadata bloquean conservadoramente el acceso
+  local, evitando reutilizar una lista antigua que podría contener revocados.
+
+## Verificación automática — 2026-10-05
+
+Entorno: Node.js 22.16.0, npm 10.9.2. Sin dependencias nuevas ni hooks de
+producción destinados a tests. Se usan node:test y fake-indexeddb reales.
+
+| Comando | Resultado observado |
+| --- | --- |
+| `npm --prefix frontend test` antes de implementar helpers | RED: 29 existentes pasan; 3 suites nuevas fallan por helpers ausentes |
+| Tests focalizados de generación y almacenamiento | RED de assertions para storage fail-closed, hidratación tardía, invalidación antes de commit, eliminación de workspace y notificación duplicada; GREEN después de sus cambios |
+| `npm --prefix frontend test` final | 52/52 pasan, 0 fallos/cancelados/omitidos |
+| `npm --prefix frontend run lint` | Exit 0, sin warnings |
+| `npm --prefix frontend run typecheck` | Exit 0 |
+| `npm --prefix frontend run build` | Exit 0; root estática; postbuild genera shell anónimo y 12 assets |
+| `npm --prefix frontend run typecheck` después del build | Exit 0 |
+| `npm --prefix backend test` | 54/54 pasan, 0 omitidos |
+| `npm --prefix backend run lint` | Exit 0 |
+| `npm --prefix backend run typecheck` | Exit 0 |
+| `npm --prefix backend run build` | Exit 0 |
+
+Los tests cubren clasificación HTTP/JSON/CSRF, cookies/no-store, identidad sin
+credenciales, generación de la misma cuenta y de cuentas distintas, eventos
+storage con suscriptores concurrentes, bloqueo durable leído en un proceso
+nuevo, aislamiento de metadata, vacío versus miss, visitas, purgas, apertura
+fallida y aborts reales de IndexedDB incluso después de request success.
+
+## Correcciones de la revisión
+
+La revisión de especificación detectó un guarda de navegación que descartaba
+denegaciones tardías de la identidad vigente. Se corrigió la política común
+de fallos y se usa tanto en carga de notas como en creación: 401/403/404 se
+procesan aunque cambie la selección; fallos ordinarios antiguos no afectan
+la navegación actual y una identidad anterior sigue descartándose.
+
+Regresión focalizada: RED 8 pass/5 fail por la política aún ausente; GREEN
+13/13 al implementarla. Suite completa posterior: 57/57; lint, typecheck,
+build/postbuild, typecheck posterior y diff check con exit 0. La aceptación
+en navegador y nueva revisión de la corrección siguen pendientes.
+
+La revisión de calidad detectó una segunda carrera: un listado autorizado
+que retira el workspace seleccionado podía purgar el caché sin cerrar el
+editor, al cambiar la navegación durante su petición. Chromium reprodujo
+RED (`sidebarRemoved: true, editorVisible: true`). Ahora la retirada se aplica
+antes del guarda de navegación y cancela las cargas afectadas; el mismo
+escenario pasó GREEN (`sidebarRemoved: true, editorVisible: false`).
+
+Regresión preservada en `frontend/tests/browser/workspace-revocation.cli.txt`.
+Es una función para `playwright-cli run-code --filename=...`, ejecutada sobre
+el perfil de prueba autenticado con workspace `Offline verification` y nota
+`Persistencia A` ya visitada, con frontend/backend locales 3000/3001. Intercepta
+solo peticiones de esa página: retrasa el listado autorizado, corta la red
+de notas, cambia selección, libera un listado vacío y comprueba que no quede
+editor. Las rutas se restauran en finally. No ejecutarla sobre un perfil real:
+la respuesta simulada purga su metadata local; los documentos Yjs se conservan.
+La suite node:test no ejecuta esta aceptación de navegador automáticamente.
+
+También se reprodujeron dos refrescos online simultáneos: la respuesta antigua
+podía volver a publicar metadata retirada por la más reciente. Se añadió un
+contador de peticiones de workspace, invalidado al limpiar identidad: un
+listado antiguo no escribe caché ni UI; las denegaciones vigentes siguen
+procesándose. Regresión Chromium RED con dos peticiones y
+`revokedWorkspaceReappeared: true`; GREEN con exactamente dos y `false`.
+Se conserva en `frontend/tests/browser/overlapping-refresh.cli.txt`, con los
+mismos requisitos de perfil/servicios y restauración de rutas en finally.
+Después del cambio: 57/57 tests, lint, typecheck, build/postbuild y typecheck
+posterior correctos.
+
+## Aceptación en navegador (Chromium, Playwright)
+
+Ejecutada con PostgreSQL en Docker (55432), backend en `:4001` y build de
+producción del frontend en `:4000`, con `@playwright/test` 1.63 y un contexto
+limpio por script (`e2e/acceptance/issue-030-*.mjs`, usando `context.setOffline`).
+
+| Escenario | Resultado |
+| --- | --- |
+| Service worker controla la portada tras la primera visita | OK |
+| Recarga completa offline: workspace y nota visibles, abrir "Nota A" restaura `texto persistido offline` | OK |
+| Logout offline bloquea la UI; recargar offline no restaura notas | OK |
+| Login explícito al volver online restaura las notas | OK |
+| Cambio de cuenta A/B: B no ve "Nota A", ni online ni offline tras recargar | OK |
+| Reconexión con título cambiado en servidor (PATCH 200): el nuevo título aparece y el contenido Yjs queda intacto | OK |
+| Logout en una pestaña bloquea la otra; recargar esa pestaña sigue bloqueada | OK |
+| Denegaciones 401/403/404 sin resurrección offline | Cubierto por tests node:test y `workspace-revocation.cli.txt`; sin script nuevo |
+
+No hubo `pageerror` en la ejecución. Los scripts no son una suite automática:
+#31 y #55 los convertirán en tests de Playwright reproducibles.
+
+No se publican PRs ni se cierran #25/#26/#30 en esta entrega.
+
+## Límites
+
+La identidad offline es una comodidad del perfil local, no autorización del
+servidor ni cifrado/borrado seguro. El bloqueo durable y la comunicación entre
+pestañas requieren almacenamiento del navegador operativo. Se conservan los
+updates Yjs por usuario/nota al cerrar sesión para no perder ediciones; el
+perfil del navegador sigue conteniendo datos privados. No se añade edición
+desconectada (#27), reconexión/sincronización de WebSocket (#28) ni UI nueva
+de estados (#29). Las modificaciones originales de backend tests, next-env.d.ts
+y globals.css, y los planes futuros 027/028/029, quedan fuera del commit.

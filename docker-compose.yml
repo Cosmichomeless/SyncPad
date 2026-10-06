@@ -1,19 +1,85 @@
+# Full stack: PostgreSQL + sync server + web app.
+#
+#   docker compose up --build            # everything, then open http://127.0.0.1:3000
+#   docker compose up -d --wait postgres # only the database (what scripts/start-backend-local.sh does)
+#
+# Settings come from the optional root .env (see .env.example, "Docker Compose" section); every
+# value below has a local default, so no file is required. Nothing here is a production secret:
+# change POSTGRES_PASSWORD before exposing the database anywhere but this machine.
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: syncpad
       POSTGRES_USER: syncpad
-      POSTGRES_PASSWORD: syncpad
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-syncpad}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - syncpad-postgres:/var/lib/postgresql/data
+    networks:
+      - syncpad
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U syncpad -d syncpad"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      # Reaches PostgreSQL by service name over the private network. URL-encode special characters
+      # if POSTGRES_PASSWORD has any.
+      DATABASE_URL: postgres://syncpad:${POSTGRES_PASSWORD:-syncpad}@postgres:5432/syncpad
+      # Exact origin the browser uses for the web app; also checked on WebSocket upgrades.
+      CORS_ORIGIN: ${SYNCPAD_WEB_ORIGIN:-http://127.0.0.1:${SYNCPAD_WEB_PORT:-3000}}
+      # The stack is served over plain http locally, so the secure-cookie default of the image is off.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-Lax}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+    ports:
+      - "127.0.0.1:${SYNCPAD_BACKEND_PORT:-3001}:3001"
+    networks:
+      - syncpad
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+    stop_grace_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Public URLs the browser uses to reach the sync server; baked into the bundle at build time.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:${SYNCPAD_BACKEND_PORT:-3001}}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://127.0.0.1:${SYNCPAD_BACKEND_PORT:-3001}/ws}
+    ports:
+      - "127.0.0.1:${SYNCPAD_WEB_PORT:-3000}:3000"
+    networks:
+      - syncpad
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  syncpad:
 
 volumes:
   syncpad-postgres:
