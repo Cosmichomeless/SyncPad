@@ -575,3 +575,43 @@ test('an undo is local work: it is pending until acknowledged and then reaches t
   await until(() => h.pending[h.pending.length - 1] === false, 'undo acknowledged');
   h.sync.destroy();
 });
+
+test('presence is forwarded, our cursor is shared after the handshake and presence is cleared on disconnect', async () => {
+  const server = new FakeServer();
+  const presence: { users: unknown[]; self: string | null }[] = [];
+  const h = harness({ server });
+  const original = h.sync;
+  original.destroy();
+  const sockets: FakeSocket[] = [];
+  const document = createEditorDocument();
+  const sync = createNoteSync({
+    document,
+    url: 'ws://test/ws?noteId=n1',
+    onState: () => {},
+    onError: () => {},
+    onAwareness: (users, self) => presence.push({ users, self }),
+    online: () => true,
+    events: { addEventListener() {}, removeEventListener() {} },
+    timing: { initialDelayMs: 10, maxDelayMs: 40, deadlineMs: 500 },
+    socketFactory: (url) => { const socket = new FakeSocket(url); sockets.push(socket); server.attach(socket); return socket as unknown as WebSocket; },
+  });
+  const cursor = { anchor: 'AQID', head: 'AQIE' };
+  sync.setCursor(cursor); // before the handshake: remembered, not sent
+  const socket = sockets[0];
+  socket.open();
+  await until(() => socket.sent.some((message) => message.type === 'awareness'), 'cursor sent after handshake');
+  assert.deepEqual(socket.sent.filter((message) => message.type === 'awareness'), [{ type: 'awareness', cursor }]);
+
+  socket.receive({ type: 'awareness', users: [{ connectionId: 'a', userId: 'u1', email: 'a@x.com' }], self: 'a' });
+  socket.receive({ type: 'awareness', users: 'nope', self: 'a' }); // malformed: ignored
+  assert.equal(presence.length, 1);
+  assert.equal(presence[0].self, 'a');
+
+  sync.setCursor(null);
+  assert.deepEqual(socket.sent[socket.sent.length - 1], { type: 'awareness', cursor: null });
+
+  socket.drop();
+  assert.deepEqual(presence[presence.length - 1], { users: [], self: null });
+  assert.equal(presence.length, 2);
+  sync.destroy();
+});

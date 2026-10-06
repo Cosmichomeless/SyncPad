@@ -356,3 +356,13 @@ p {
   color: #1d5f8a;
   text-decoration: underline;
 }
+
+.presence { display: grid; gap: 0.4rem; margin: 0.5rem 0; }
+.presence-list, .presence-selections { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.presence-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.6rem; border: 1px solid var(--presence); border-radius: 999px; font-size: 0.85rem; color: var(--presence); }
+.presence-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--presence); }
+.presence-selections { display: grid; font-size: 0.8rem; color: #555; }
+.presence-selections li { overflow-wrap: anywhere; border-left: 3px solid var(--presence); padding-left: 0.5rem; }
+.presence-name { font-weight: 600; color: var(--presence); }
+.presence-selections mark { background: color-mix(in srgb, var(--presence) 25%, transparent); color: inherit; border-radius: 2px; }
+.presence-caret { color: var(--presence); font-weight: 700; }

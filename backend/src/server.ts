@@ -4,7 +4,7 @@ import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type WebSocket from 'ws';
-import type { ClientSyncMessage, HealthResponse, ServerSyncMessage } from '@syncpad/shared';
+import type { AwarenessCursor, AwarenessUser, ClientSyncMessage, HealthResponse, ServerSyncMessage } from '@syncpad/shared';
 import { applyNoteUpdate, assertValidNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince, encodeNoteStateVector, isNoteSchemaError } from '@syncpad/shared';
 import type { NoteId } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
@@ -28,7 +28,7 @@ function rejectUpgrade(socket: Duplex, status: number) {
 
 type NoteRoom = {
   document: ReturnType<typeof createNoteDocument>;
-  clients: Map<WebSocket, { connectionId: string; userId: string; email: string }>;
+  clients: Map<WebSocket, AwarenessUser>;
   /** Serializes snapshots and updates so a snapshot never overtakes an append in flight. */
   queue: Promise<void>;
 };
@@ -40,6 +40,17 @@ function enqueue(room: NoteRoom, task: () => Promise<void>) {
 }
 
 const MAX_REQUEST_ID_LENGTH = 128;
+const MAX_CURSOR_LENGTH = 256;
+
+/** A cursor is two short base64 strings or nothing; anything else is a malformed message. */
+function parseCursor(value: unknown): AwarenessCursor | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'object') throw new Error('invalid cursor');
+  const { anchor, head } = value as Record<string, unknown>;
+  const valid = (part: unknown): part is string => typeof part === 'string' && part.length > 0 && part.length <= MAX_CURSOR_LENGTH && /^[A-Za-z0-9+/]+={0,2}$/.test(part);
+  if (!valid(anchor) || !valid(head)) throw new Error('invalid cursor');
+  return { anchor, head };
+}
 
 function encode(data: Uint8Array) {
   return Buffer.from(data).toString('base64');
@@ -173,13 +184,15 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           return;
         }
         const connectionId = randomUUID();
-        const participant = { connectionId, userId: roomUser?.id ?? 'anonymous', email: roomUser?.email ?? 'anonymous' };
+        const participant: AwarenessUser = { connectionId, userId: roomUser?.id ?? 'anonymous', email: roomUser?.email ?? 'anonymous' };
         const send = (message: ServerSyncMessage) => {
           if (client.readyState === client.OPEN) client.send(JSON.stringify(message));
         };
         const broadcastAwareness = (room: NoteRoom) => {
-          const payload = JSON.stringify({ type: 'awareness', users: [...room.clients.values()] });
-          for (const peer of room.clients.keys()) if (peer.readyState === peer.OPEN) peer.send(payload);
+          const users = [...room.clients.values()];
+          for (const [peer, who] of room.clients) {
+            if (peer.readyState === peer.OPEN) peer.send(JSON.stringify({ type: 'awareness', users, self: who.connectionId } satisfies ServerSyncMessage));
+          }
         };
         const snapshot = (room: NoteRoom, requestId?: string, since?: Uint8Array): ServerSyncMessage => ({
           type: 'sync',
@@ -221,6 +234,8 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
               const update = decode(message.update);
               await enqueue(room, () => persistUpdate(room, update, message.update, requestId));
             } else if (message.type === 'awareness') {
+              // `cursor` absent keeps the current one (legacy ping); null clears it.
+              if ('cursor' in message) participant.cursor = parseCursor(message.cursor);
               broadcastAwareness(room);
             }
           } catch (error) {

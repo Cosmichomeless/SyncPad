@@ -1,8 +1,13 @@
-import type { ClientSyncMessage, ServerSyncMessage } from '@syncpad/shared';
+import type { AwarenessCursor, AwarenessUser, ClientSyncMessage, ServerSyncMessage } from '@syncpad/shared';
 import { applyEditorUpdate, assertCompatibleUpdate, encodeEditorStateSince, encodeEditorStateVector, isLocalChange, NoteSchemaError, REMOTE_ORIGIN, type EditorDocument } from './note-document';
 
 export type SyncState = 'offline' | 'reconnecting' | 'syncing' | 'up-to-date';
-export type NoteSyncHandle = { retry(): void; destroy(): void };
+export type NoteSyncHandle = {
+  retry(): void;
+  destroy(): void;
+  /** Shares the local selection with the room (null clears it). Ephemeral: never touches the document. */
+  setCursor(cursor: AwarenessCursor | null): void;
+};
 /** What an out-of-band check says about the note: still there, deleted/unreachable, or no answer. */
 export type NoteProbe = 'present' | 'gone' | 'unknown';
 
@@ -26,6 +31,11 @@ export type NoteSyncOptions = {
    * stays exactly as it was until the app is updated.
    */
   onIncompatible?(): void;
+  /**
+   * Who is connected to the note right now and which connection is ours. Called with an empty
+   * list whenever the connection is lost, because presence is only meaningful while connected.
+   */
+  onAwareness?(users: AwarenessUser[], self: string | null): void;
   /**
    * Asked after a connection attempt failed before opening, because a WebSocket upgrade
    * cannot tell "deleted" from "offline". Must resolve 'unknown' when it cannot decide.
@@ -62,7 +72,7 @@ function fromBase64(value: string) {
  * caller and survive every reconnect and destroy().
  */
 export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
-  const { document, url, onState, onPending, onError, onGone, onIncompatible, probe } = options;
+  const { document, url, onState, onPending, onError, onGone, onIncompatible, onAwareness, probe } = options;
   const timing = { ...DEFAULT_TIMING, ...options.timing };
   const online = options.online ?? (() => navigator.onLine);
   const events = options.events ?? window;
@@ -86,6 +96,8 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   let lastState: SyncState | undefined;
   let lastPending: boolean | undefined;
+  let cursor: AwarenessCursor | null = null;
+  let hasPeers = false;
 
   const nextId = (kind: string) => `${kind}-${++requestCounter}`;
   const isOpen = () => socket !== null && socket.readyState === SOCKET_OPEN;
@@ -116,7 +128,14 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
     retryTimer = undefined;
   }
 
+  function clearPresence() {
+    if (!hasPeers) return;
+    hasPeers = false;
+    onAwareness?.([], null);
+  }
+
   function resetSession() {
+    clearPresence();
     handshakeId = null;
     baseVector = null;
     upload = null;
@@ -228,11 +247,17 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
         baseVector = fromBase64(message.stateVector);
         // Reconciliation always uploads: after a reload nothing proves the server has our persisted state.
         sendUpload();
+        if (cursor) send({ type: 'awareness', cursor });
         publish();
         return;
       }
       case 'update':
         applyRemote(fromBase64(message.update));
+        return;
+      case 'awareness':
+        if (!Array.isArray(message.users)) return;
+        hasPeers = true;
+        onAwareness?.(message.users, typeof message.self === 'string' ? message.self : null);
         return;
       case 'ack': {
         if (!upload || message.requestId !== upload.id) return;
@@ -319,6 +344,10 @@ export function createNoteSync(options: NoteSyncOptions): NoteSyncHandle {
       teardown();
       clearRetry();
       connect();
+    },
+    setCursor(next) {
+      cursor = next;
+      if (isOpen() && baseVector) send({ type: 'awareness', cursor: next });
     },
     destroy() {
       if (destroyed) return;

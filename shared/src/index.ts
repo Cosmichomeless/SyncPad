@@ -46,7 +46,21 @@ export type SyncHandshake = {
 export type ClientSyncMessage =
   | { type: 'sync-request'; requestId?: string; stateVector?: string }
   | { type: 'update'; requestId?: string; update: string }
-  | { type: 'awareness' };
+  | { type: 'awareness'; cursor?: AwarenessCursor | null };
+
+/**
+ * An ephemeral selection, as two base64 Yjs relative positions so it follows the text while
+ * others edit. Never written to the document or to storage.
+ */
+export type AwarenessCursor = { anchor: string; head: string };
+
+/** One live connection in a note's room. The same user in two tabs appears twice. */
+export type AwarenessUser = {
+  connectionId: string;
+  userId: string;
+  email: string;
+  cursor?: AwarenessCursor | null;
+};
 
 /**
  * `note-deleted` is final: the note no longer exists on the server and must not be recreated by a client.
@@ -60,6 +74,7 @@ export type ServerSyncMessage =
   | { type: 'sync'; requestId?: string; update: string; stateVector: string }
   | { type: 'update'; update: string }
   | { type: 'ack'; requestId: string }
+  | { type: 'awareness'; users: AwarenessUser[]; self: string }
   | { type: 'sync-error'; requestId?: string; code: SyncErrorCode; retryable: boolean };
 
 export {
