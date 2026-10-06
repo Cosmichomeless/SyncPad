@@ -88,11 +88,10 @@ Resultado observado (proyecto `syncpad-b`, puertos 13000/14001/15432):
   (`127.0.0.1`, no `localhost`), o el backend rechaza CORS y el WebSocket.
 - El frontend sale con código 143 en `docker compose stop` (el servidor standalone de
   Next no captura `SIGTERM`); no afecta a los datos.
-- Defecto previo, no corregido aquí: `backend/src/migrate.ts` crea
-  `schema_migrations` sin cualificar. Con el rol `syncpad`, `"$user"` apunta al
-  esquema `syncpad` (creado por la migración 001), así que el **segundo** arranque
-  crea otra tabla vacía, vuelve a aplicar las 8 migraciones (idempotentes hoy) y
-  muestra «Applied 8 migration(s)»; desde el tercero muestra 0. Conviene cualificar
-  la tabla (`public.schema_migrations`) antes de añadir migraciones no idempotentes.
+- Defecto previo, ya corregido: `migrate.ts` creaba `schema_migrations` sin cualificar y el
+  **segundo** arranque reaplicaba las 8 migraciones (mostraba «Applied 8 migration(s)»).
+  Ahora el registro es `public.schema_migrations` y todo arranque posterior al primero
+  muestra 0. Una base creada antes del arreglo conserva una `syncpad.schema_migrations`
+  huérfana; no se lee y se puede borrar.
 - No se ejecuta el e2e de Playwright del repositorio contra esta pila (está atado a
   los puertos 4000/4001 y arranca sus propios servidores).

@@ -132,7 +132,7 @@ Con PostgreSQL iniciado, ejecuta las migraciones desde `backend/`:
 npm --prefix backend run migrate
 ```
 
-El runner crea `schema_migrations`, aplica los archivos SQL de
+El runner crea `public.schema_migrations`, aplica los archivos SQL de
 `backend/migrations/` en orden lexicográfico y registra cada archivo aplicado
 dentro de la misma transacción. Repetir el comando es seguro y no vuelve a
 ejecutar migraciones ya registradas.

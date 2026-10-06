@@ -11,7 +11,7 @@ test('a clean database is migrated from nothing and the schema is complete', asy
   const files = (await readdir(MIGRATIONS)).filter((file) => file.endsWith('.sql')).sort();
   assert.equal(db.migrationOutput, `Applied ${files.length} migration(s)`);
 
-  const applied = await db.pool.query<{ version: string }>('SELECT version FROM schema_migrations ORDER BY version');
+  const applied = await db.pool.query<{ version: string }>('SELECT version FROM public.schema_migrations ORDER BY version');
   assert.deepEqual(applied.rows.map((row) => row.version), files);
 
   const tables = await db.pool.query<{ table_name: string }>(
@@ -31,9 +31,22 @@ test('migrating again is harmless: the stored data and the application tables su
   const users = await db.pool.query(`SELECT 1 FROM syncpad.users WHERE email = 'keep@example.com'`);
   assert.equal(users.rowCount, 1);
   const tables = await db.pool.query<{ table_name: string }>(
-    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'syncpad' AND table_name <> 'schema_migrations' ORDER BY table_name`,
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = 'syncpad' ORDER BY table_name`,
   );
   assert.equal(tables.rowCount, 8);
+});
+
+test('the migration log is a single table and a second run applies nothing', async (t) => {
+  const db = await createCleanDatabase(t);
+  const files = (await readdir(MIGRATIONS)).filter((file) => file.endsWith('.sql'));
+  assert.equal(await migrateAgain(db.url), 'Applied 0 migration(s)');
+  assert.equal(await migrateAgain(db.url), 'Applied 0 migration(s)');
+  const logs = await db.pool.query<{ table_schema: string }>(
+    `SELECT table_schema FROM information_schema.tables WHERE table_name = 'schema_migrations'`,
+  );
+  assert.deepEqual(logs.rows.map((row) => row.table_schema), ['public']);
+  const applied = await db.pool.query('SELECT version FROM public.schema_migrations');
+  assert.equal(applied.rowCount, files.length);
 });
 
 test('the schema enforces what the application relies on', async (t) => {

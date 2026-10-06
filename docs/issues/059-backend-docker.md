@@ -111,7 +111,7 @@ docker stop syncpad-be
 #   close: code=1001 reason=Server shutting down ; ExitCode 0
 ```
 
-Un segundo arranque aplica 0 migraciones (el registro está en `schema_migrations`);
+Un segundo arranque aplica 0 migraciones (el registro está en `public.schema_migrations`);
 «8» solo aparece sobre una base de datos nueva.
 
 ## Límites
