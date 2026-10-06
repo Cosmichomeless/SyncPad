@@ -1,134 +1,123 @@
-# #25 — Persistencia local de notas Yjs
+# #25 — Persistencia local de documentos Yjs en IndexedDB
 
-## Entrega y decisión basada en evidencia
+## Objetivo
 
-La entrega inicial (3c545de) usaba y-indexeddb 9.0.12. Su whenSynced solo se
-resuelve con el evento synced; la cadena interna _db.then/fetchUpdates no
-maneja rechazos. Por tanto, un catch en el editor no podía gestionar errores
-de apertura/lectura: dejaba una promesa pendiente y un rechazo no manejado.
-Las nuevas pruebas reprodujeron ambos rechazos con fake-indexeddb antes de
-cambiar el adaptador (7 pass, 3 fail, 2 cancelled; código 1). Una prueba de
-inyección de indisponibilidad tenía inicialmente un mock getter inválido;
-se corrigió a una apertura que lanza SecurityError. La cancelación también
-mostró una promesa de hidratación pendiente.
+Guardar el estado local de cada nota para poder abrirla sin conexión. El
+módulo es `frontend/src/lib/note-persistence.ts` y la página lo usa desde
+`frontend/src/app/page.tsx` (`persistNote`). Este documento describe el estado
+actual consolidado y conserva las decisiones históricas que explican el diseño.
 
-Se sustituye el adaptador fino por IndexedDB nativo, sin campos privados de
-la dependencia. y-indexeddb se elimina; fake-indexeddb se conserva para tests.
-La clave sigue siendo syncpad:note: seguida de JSON [userId, noteId]. Se
-conservan la versión uno, updates con autoIncrement y custom; el adaptador
-lee las actualizaciones existentes sin migración ni eliminación de datos.
+## Criterios de aceptación y evidencia
 
-La revisión de calidad reprodujo otra carrera: tras 30 ediciones, llamar a
-destroy() sin esperarlo y abrir inmediatamente la misma clave hidrataba un
-documento vacío. La cadena pending.then creaba transacciones demasiado tarde;
-la lectura nueva adelantaba las escrituras aún no enviadas. Antes del cambio,
-`npm --prefix frontend test` devolvió 17 pass, 2 fail, 0 cancelled (código 1):
-la reapertura inmediata esperaba `Exact final content 29 🙂` y recibió vacío;
-la reapertura repetida esperaba `Latest 0 🙂` y recibió vacío.
+| Criterio de la issue | Evidencia automática | Cobertura |
+| --- | --- | --- |
+| Una nota visitada vuelve a abrir tras recargar offline | `note-persistence.test.tsx`: `restores a visited note without network`; `offline-metadata.test.tsx`: visitas y listados cacheados; e2e `offline-reconnection.spec.ts` (recarga completa tras editar sin red) | Capa IndexedDB con tests unitarios reales (Yjs + fake-indexeddb). El recorrido completo en navegador está en el e2e, que necesita Postgres y Chromium |
+| Los datos locales están separados por usuario y nota | `isolates two users sharing a note ID`, `isolates two notes belonging to one user`, `storage keys encode user and note IDs unambiguously`; metadata aislada en `offline-metadata.test.tsx` (`orphans are isolated per user`); e2e `account-isolation.spec.ts` | Unitario y e2e |
 
-storeUpdate ahora crea cada transacción readwrite sincrónicamente. IndexedDB
-ordena las transacciones conflictivas, incluidas las de otra conexión a la
-misma base. Un conjunto de promesas con errores tratados registra las
-escrituras pendientes para destroy(); no hay coordinación global de claves.
+Ningún criterio carece de test. Las limitaciones de la cobertura se detallan
+en el último apartado.
 
-## Comportamiento real
+## Comportamiento
 
-- whenSynced: Promise<void> rechaza por errores síncronos de apertura,
-  request.onerror, lectura o aborto de la transacción de lectura. Los datos
-  solo se aplican después de completar la transacción. El catch del editor
-  muestra «No se pudo abrir el almacenamiento local» y no inicia el socket.
-- El listener Yjs de updates se registra después de hidratar. Se guarda el
-  estado inicial hidratado y se envían inmediatamente las transacciones de
-  actualizaciones posteriores, sin diferir su creación detrás de una promesa.
-- Las escrituras se esperan hasta transaction.oncomplete, no solo el éxito
-  del request. Errores y abortos se consumen y notifican mediante onError;
-  la UI activa muestra «No se pudo guardar en el almacenamiento local».
-  No se promete conservar una actualización cuya escritura falló.
-- destroy(): Promise<void> es idempotente, retira el listener inmediatamente,
-  espera hidratación y escrituras pendientes, y cierra la base antes de que
-  la página destruya el documento. Los errores de hidratación ya observados
-  no hacen fallar el cleanup. Un catch interno impide rechazos no manejados
-  cuando se cancela sin esperar whenSynced; el consumidor aún recibe su rechazo.
-- Una apertura cancelada cierra la base antes de leer/aplicar datos. Si la
-  cancelación ocurre durante la lectura, se espera su transacción y no se
-  aplica contenido ni se registra el listener. whenSynced se resuelve sin
-  aplicar datos en una cancelación exitosa; la página comprueba cancelled.
-- Los callbacks de UI quedan protegidos por cancelled. El WebSocket,
-  metadata, shell offline y reconexión no se reescriben.
+- **Clave.** Cada nota vive en una base IndexedDB cuyo nombre es
+  `syncpad:note:` seguido de `JSON.stringify([userId, noteId])`. El JSON evita
+  colisiones entre pares (usuario, nota) distintos, incluso con separadores en
+  los IDs. Dos usuarios que comparten el ID de una nota no comparten datos.
+- **Formato.** Versión uno de la base, con un store `updates` de claves
+  autoincrementales y un store `custom`. Es el mismo esquema que usaba
+  `y-indexeddb` 9.0.12, de modo que se leen los datos existentes sin
+  migración (`reads the existing y-indexeddb version-one updates schema`).
+  El contenido guardado es un registro append-only de updates de Yjs.
+- **Hidratación.** `whenSynced: Promise<void>` rechaza ante errores síncronos o
+  asíncronos de apertura, de lectura o abortos de la transacción. Los datos
+  solo se aplican al documento cuando la transacción de lectura completa. El
+  editor muestra «No se pudo abrir el almacenamiento local» y no inicia el
+  socket. Los updates malformados se rechazan y cierran el almacenamiento.
+- **Escritura.** El listener de updates se registra después de hidratar. Cada
+  update crea una transacción `readwrite` de forma sincrónica y se espera
+  hasta `transaction.oncomplete`, no solo hasta el éxito del request. Errores
+  y abortos se notifican por `onError` y la UI muestra «No se pudo guardar en
+  el almacenamiento local». No se promete conservar un update cuya escritura
+  falló.
+- **Cierre.** `destroy()` es idempotente: retira el listener, espera la
+  hidratación y las escrituras pendientes y cierra la base. Una apertura
+  cancelada cierra la base sin aplicar datos.
+- **Esquema.** Una copia local escrita por un esquema de documento más nuevo
+  se rechaza sin leerla, aplicarla ni reescribirla (ver
+  [#35](035-schema-versions.md)).
+- **Borrado.** `deleteLocalNote` elimina únicamente la copia local de esa nota
+  (`discarding a deleted note erases only that note's local copy`).
+- **Alcance.** `persistNote` guarda el documento; el listado de notas, la
+  identidad y las visitas se guardan en otros módulos
+  ([#30](030-offline-navigation.md)). El shell offline es el
+  [#26](026-app-shell.md). La reconexión y la fusión con el servidor son de
+  [#31](031-offline-e2e.md).
 
-## Verificación ejecutada
+## Decisiones históricas
 
-Node.js 22.16.0 / npm 10.9.2. Eliminación de dependencia:
+1. **IndexedDB nativo en lugar de `y-indexeddb`.** La entrega inicial usaba
+   `y-indexeddb`. Su `whenSynced` solo se resuelve con el evento `synced` y la
+   cadena interna no maneja rechazos, así que un `catch` en el editor no podía
+   gestionar errores de apertura o lectura: quedaba una promesa pendiente y un
+   rechazo no manejado. Las pruebas reprodujeron ambos fallos con
+   fake-indexeddb antes de cambiar el adaptador (7 pass, 3 fail, 2 cancelled).
+   Se sustituyó por un adaptador propio sin campos privados de la dependencia y
+   se eliminó `y-indexeddb`; `fake-indexeddb` se conserva para los tests.
+2. **Carrera de reapertura inmediata.** Tras 30 ediciones, llamar a
+   `destroy()` sin esperarlo y abrir enseguida la misma clave hidrataba un
+   documento vacío: la cadena `pending.then` creaba las transacciones
+   demasiado tarde y la lectura nueva adelantaba a las escrituras. Antes del
+   arreglo: 17 pass, 2 fail. La corrección crea cada transacción `readwrite`
+   sincrónicamente; IndexedDB ordena las transacciones conflictivas, también
+   entre conexiones a la misma base. Un conjunto de promesas con errores
+   tratados registra las escrituras pendientes para `destroy()`. No hay
+   coordinación global de claves.
 
-`npm --prefix frontend uninstall y-indexeddb --cache /tmp/syncpad-npm-cache --no-audit --no-fund`
+## Verificación
 
-Resultado: removed 1 package, código 0.
+Tests de `frontend/tests/note-persistence.test.tsx` (Yjs y fake-indexeddb
+reales, salvo inyección dirigida de fallos):
 
-| Comando desde la raíz | Resultado |
-| --- | --- |
-| npm --prefix frontend test | 19 tests, 19 pass, 0 fail, 0 cancelled, código 0 |
-| npm --prefix frontend run lint | Sin errores, código 0 |
-| npm --prefix frontend run typecheck | Sin errores, código 0 |
-| npm --prefix frontend run build | Compiled successfully; / y /_not-found estáticas, código 0 |
-| npm --prefix frontend run typecheck tras build | Sin errores, código 0 |
+- Restauración sin red, aislamiento por usuario y por nota, codificación de
+  claves e hidratación repetida sin duplicar contenido.
+- Cancelación antes de hidratar, durante la apertura y durante la lectura.
+- Errores de apertura (factory que lanza, IndexedDB no disponible) y de
+  lectura; abortos de escritura antes y después del éxito del request.
+- Cola de 30 ediciones exactas (incluido Unicode) y reaperturas inmediatas y
+  repetidas de la misma clave sin esperar al cierre anterior.
+- Rechazo de updates malformados, compatibilidad con el esquema de
+  `y-indexeddb`, borrado local de una nota y rechazo de copias de un esquema
+  más nuevo.
 
-Las pruebas usan Yjs y fake-indexeddb reales salvo inyección dirigida de fallos.
-Cubren restauración, aislamiento por usuario y nota, claves, hidratación
-repetida, cierre durante apertura/lectura, errores síncronos y asíncronos de
-apertura, lectura denegada, escritura abortada antes/después del éxito del
-request, cola de 30 ediciones exactas (incluido Unicode), reapertura inmediata
-antes de esperar el cierre, cinco reaperturas rápidas sucesivas, rechazo de
-updates Yjs malformados, cierre idempotente y compatibilidad del esquema
-anterior. node:test detecta rechazos no manejados
-(como los de la reproducción RED); la suite final no reporta ninguno.
+`node:test` detecta los rechazos no manejados; la suite no reporta ninguno.
 
-## Verificación autenticada en navegador (agente principal)
+Comando: `cd frontend && npx tsx --test tests/*.test.tsx`. En la sesión de
+documentación (Node.js 22, rama apilada sobre `issue/56-accessibility`) la
+suite de frontend completa dio 157/157 tests correctos.
 
-Chromium local mediante Playwright CLI, frontend compilado con Next start y
-backend con `node --import tsx src/index.ts`. Base dedicada
-`syncpad_offline_verify_20261005`, con las siete migraciones aplicadas.
+Evidencia manual de la entrega original (agente principal, Chromium con
+Playwright CLI, frontend compilado y backend local): registro, creación de
+workspace y nota desde la UI; edición online; recarga online con la red
+bloqueada antes de seleccionar la nota ya listada, con el texto restaurado
+exactamente y estado `desconectado`; y almacenamiento denegado mediante una
+apertura IndexedDB que lanza `SecurityError`, con el alert
+`No se pudo abrir el almacenamiento local` y sin carga pendiente. Aquella
+prueba no fue una recarga completa con la red bloqueada; esa parte la cubre el
+e2e posterior de [#31](031-offline-e2e.md).
 
-- Registro de cuenta de prueba, creación de workspace y nota desde la UI.
-- Edición online: `Contenido persistido A — verificación real`.
-- Recarga online, bloqueo de red antes de seleccionar la nota ya listada:
-  el editor restaura exactamente ese texto y muestra `desconectado`.
-- Red restaurada y almacenamiento denegado mediante una apertura IndexedDB
-  que lanza SecurityError: seleccionar la nota muestra el alert español
-  `No se pudo abrir el almacenamiento local`; no queda una carga pendiente.
-- Revisión independiente de especificación de `25250df..27d22ac`: PASS
-  para los criterios de la entrega documental anterior, con 16/16 pruebas.
-  No constituye revisión del cambio posterior de reapertura inmediata.
+## Límites
 
-Esta prueba no constituye una recarga completa con la red bloqueada.
-El navegador no se volvió a ejercitar para este cambio del adaptador; la
-regresión de lifecycle se verificó con Yjs/fake-indexeddb reales.
-
-## Límites y revisión pendiente
-
-La UI autenticada se ejercitó como se detalla arriba; la recarga offline
-completa todavía no. Las pruebas verifican el documento local, no la
-recuperación de toda la aplicación.
-El shell offline depende de #26 y la navegación/metadata de #30; /auth/me y
-los listados aún requieren red. No se añade edición desconectada ni reconexión.
-#25 permanece abierta. La revisión de especificación pasó; la revisión de
-calidad detectó la carrera de reapertura, corregida y aprobada en la revisión
-independiente de `27d22ac..5472766`, con 19/19 tests y sin bloqueos.
-
-El registro de updates es append-only, sin compactación automática: el uso
-prolongado puede aumentar almacenamiento/tiempo de lectura. Los datos no se
-borran al cerrar sesión ni están cifrados; separar claves por usuario no
-protege frente a acceso al perfil del navegador. Las modificaciones previas
-de tests backend, next-env.d.ts y globals.css quedan fuera de esta entrega.
-La entrega documental queda lista para PR/integración; no se cierra la issue
-hasta verificar la recarga completa offline junto con #26/#30.
-
-## Integración de navegación #30 — aceptación pendiente
-
-#30 incorpora recuperación de identidad y metadata por usuario, navegación de
-notas visitadas y bloqueo local al cerrar sesión. La hidratación Yjs conserva
-el adaptador de #25; refrescar resúmenes no recrea el documento seleccionado.
-Frontend 52/52 y backend 54/54 tests pasan, junto con lint/typecheck/build y
-postbuild/typecheck posterior del frontend. No se ejercitó esta nueva
-integración en navegador por el implementador; recarga completa offline,
-cambio de cuenta y logout entre pestañas siguen pendientes del controlador.
-#25 continúa abierta. Evidencia: [#30](030-offline-navigation.md).
+- Cobertura de navegador: no hay test unitario de `page.tsx` que ligue la
+  hidratación con la UI; esa integración solo se ejerce en los e2e de
+  Playwright, que requieren Postgres y Chromium y no se ejecutaron al escribir
+  este documento.
+- El registro de updates es append-only y no hay compactación en el cliente:
+  el uso prolongado de una nota aumenta almacenamiento y tiempo de lectura.
+- Los datos locales no se borran al cerrar sesión ni están cifrados. Separar
+  las claves por usuario evita mezclas en la aplicación, pero no protege frente
+  a quien tenga acceso al perfil del navegador. Política en
+  [#52](052-data-isolation.md).
+- Si falla una escritura local, esa actualización no se conserva offline
+  (se avisa en la UI); no hay reintento.
+- Sin IndexedDB disponible (por ejemplo, modos privados restrictivos) la nota
+  no se abre y se muestra el error en español.
