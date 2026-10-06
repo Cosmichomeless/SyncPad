@@ -326,3 +326,12 @@ aceptación en Chromium: recarga offline con contenido restaurado, logout
 offline y en dos pestañas, aislamiento entre cuentas y reconexión con metadata
 cambiada. #25/#26/#30 siguen abiertas hasta que las cierres. Evidencia en
 [docs/issues/030-offline-navigation.md](docs/issues/030-offline-navigation.md).
+
+## Edición local desconectada (#27)
+
+Escribir es local-first: cada cambio se aplica como un splice mínimo sobre
+`Y.Text` (sin reemplazar el documento entero) y se guarda en IndexedDB antes de
+depender del WebSocket. Sin conexión se puede seguir escribiendo; la UI muestra
+un aviso de cambios pendientes y el texto sobrevive a recargas. El envío al
+reconectar llega con #28. Detalle y evidencia en
+[docs/issues/027-local-editing.md](docs/issues/027-local-editing.md).

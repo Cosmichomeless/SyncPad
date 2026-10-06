@@ -2,13 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
-import { applyEditorUpdate, createEditorDocument, encodeEditorState, type EditorDocument } from '../lib/note-document';
+import { applyEditorUpdate, applyLocalTextEdit, createEditorDocument, LOCAL_EDIT_ORIGIN, type EditorDocument } from '../lib/note-document';
 import { persistNote } from '../lib/note-persistence';
 import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
 import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWorkspaces, removeWorkspace, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
+
+function toBase64(bytes: Uint8Array) {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
 
 export default function Home() {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
@@ -23,6 +29,8 @@ export default function Home() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [editorText, setEditorText] = useState('');
+  const [editable, setEditable] = useState(false);
+  const [pending, setPending] = useState(false);
   const [syncState, setSyncState] = useState<'desconectado' | 'conectando' | 'conectado'>('desconectado');
   const documentRef = useRef<EditorDocument | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -36,6 +44,8 @@ export default function Home() {
   const setSelectedNote = useCallback((note: NoteSummary | null) => {
     noteRef.current = note;
     setEditorText('');
+    setEditable(false);
+    setPending(false);
     setSyncState('desconectado');
     updateSelectedNote(note);
   }, []);
@@ -258,12 +268,18 @@ export default function Home() {
       if (hydrated && !cancelled && isCurrentIdentity(identity)) setEditorText(document.content.toString());
     };
     document.content.observe(observeContent);
+    const forwardLocalUpdate = (update: Uint8Array, origin: unknown) => {
+      if (origin !== LOCAL_EDIT_ORIGIN || !socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: 'update', update: toBase64(update) }));
+    };
+    document.doc.on('update', forwardLocalUpdate);
     void persistence.whenSynced.then(async () => {
       if (cancelled || !isCurrentIdentity(identity)) return;
       await markVisited(identity, note).catch(cause => cacheFailure(cause, identity));
       if (cancelled || !isCurrentIdentity(identity)) return;
       hydrated = true;
       setEditorText(document.content.toString());
+      setEditable(true);
       setSyncState('conectando');
       const connection = new WebSocket(`${WS_URL}?noteId=${noteId}`);
       socket = connection;
@@ -287,6 +303,7 @@ export default function Home() {
     return () => {
       cancelled = true;
       document.content.unobserve(observeContent);
+      document.doc.off('update', forwardLocalUpdate);
       socket?.close();
       if (socketRef.current === socket) socketRef.current = null;
       if (documentRef.current === document) documentRef.current = null;
@@ -298,15 +315,11 @@ export default function Home() {
   }, [userId, noteId, cacheFailure]);
 
   function editContent(value: string) {
-    if (!identityRef.current || !isCurrentIdentity(identityRef.current)) return;
+    const identity = identityRef.current;
     const document = documentRef.current;
-    if (!document || !socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return;
-    document.doc.transact(() => {
-      document.content.delete(0, document.content.length);
-      document.content.insert(0, value);
-    });
-    setEditorText(value);
-    socketRef.current.send(JSON.stringify({ type: 'update', update: btoa(String.fromCharCode(...encodeEditorState(document.doc))) }));
+    if (!identity || !isCurrentIdentity(identity) || !document) return;
+    if (applyLocalTextEdit(document, value)) setPending(true);
+    setEditorText(document.content.toString());
   }
 
   async function logout() {
@@ -340,7 +353,7 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       <section className="workspace-grid">
         <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form></aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {syncState}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={syncState} /></div><textarea aria-label="Contenido de la nota" value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {syncState}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={syncState} /></div>{pending && <p className="pending" role="status">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}<textarea aria-label="Contenido de la nota" disabled={!editable} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );
