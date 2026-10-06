@@ -71,6 +71,13 @@ export async function createCleanDatabase(t: TestContext): Promise<CleanDatabase
   const pool = new pg.Pool({ connectionString: url, max: 4 });
   cleanupAfter(t, async () => {
     await pool.end();
+    // `pool.end()` resolves before its sockets are fully closed; forcing the drop in that window
+    // kills a connection mid-goodbye and surfaces as an uncaught "administrator command" error.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const { rows } = await admin.query('SELECT count(*)::int AS open FROM pg_stat_activity WHERE datname = $1', [name]);
+      if (rows[0].open === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await admin.end();
   });
