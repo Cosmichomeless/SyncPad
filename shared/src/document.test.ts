@@ -113,3 +113,15 @@ test('the frontend keeps its own copy of the schema version in sync with this on
   const source = readFileSync(new URL('../../frontend/src/lib/note-document.ts', import.meta.url), 'utf8');
   assert.match(source, new RegExp(`const DOCUMENT_SCHEMA_VERSION = ${DOCUMENT_SCHEMA_VERSION};`));
 });
+
+test('formatted text (bold, links) is an additive change: still a valid schema v1 update', () => {
+  const author = createNoteDocument();
+  author.content.insert(0, 'hola mundo');
+  author.content.format(0, 4, { bold: true });
+  author.content.format(5, 5, { link: 'https://example.com/' });
+  const server = createNoteDocument();
+  assert.doesNotThrow(() => assertValidNoteUpdate(server.doc, encodeNoteState(author.doc)));
+  applyNoteUpdate(server.doc, encodeNoteState(author.doc));
+  assert.equal(server.content.toString(), 'hola mundo');
+  assert.equal(readSchemaVersion(server.doc), DOCUMENT_SCHEMA_VERSION);
+});

@@ -5,6 +5,8 @@ import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
 import { applyLocalTextEdit, createEditorDocument, NoteSchemaError, redoLocalEdit, undoLocalEdit, type EditorDocument } from '../lib/note-document';
 import { createNoteSync, type NoteSyncHandle, type SyncState } from '../lib/note-sync';
 import NoteSyncStatus from './note-sync-status';
+import RichPreview from './rich-preview';
+import { readBlocks, removeLink, setLink, toggleBold, toggleList, type Block } from '../lib/rich-text';
 import { deleteLocalNote, persistNote } from '../lib/note-persistence';
 import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
@@ -26,6 +28,10 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [editorText, setEditorText] = useState('');
   const [editable, setEditable] = useState(false);
+  const [blocks, setBlocks] = useState<Block[]>([]);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState('');
+  const [formatError, setFormatError] = useState('');
   const [pending, setPending] = useState(false);
   const [syncError, setSyncError] = useState('');
   const [networkOnline, setNetworkOnline] = useState(true);
@@ -36,6 +42,7 @@ export default function Home() {
   const [orphans, setOrphans] = useState<NoteSummary[]>([]);
   const deletedIdsRef = useRef(new Set<string>());
   const documentRef = useRef<EditorDocument | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const syncRef = useRef<NoteSyncHandle | null>(null);
   const identityRef = useRef<OfflineIdentity | null>(null);
   const workspaceRef = useRef<WorkspaceSummary | null>(null);
@@ -47,6 +54,8 @@ export default function Home() {
   const setSelectedNote = useCallback((note: NoteSummary | null) => {
     noteRef.current = note;
     setEditorText('');
+    setBlocks([]);
+    setLinkOpen(false); setLinkUrl(''); setFormatError('');
     setEditable(false);
     setPending(false);
     setSyncError('');
@@ -290,7 +299,9 @@ export default function Home() {
     let sync: NoteSyncHandle | null = null;
     documentRef.current = document;
     const observeContent = () => {
-      if (hydrated && !cancelled && isCurrentIdentity(identity)) setEditorText(document.content.toString());
+      if (!hydrated || cancelled || !isCurrentIdentity(identity)) return;
+      setEditorText(document.content.toString());
+      setBlocks(readBlocks(document.content));
     };
     document.content.observe(observeContent);
     void persistence.whenSynced.then(async () => {
@@ -299,6 +310,7 @@ export default function Home() {
       if (cancelled || !isCurrentIdentity(identity)) return;
       hydrated = true;
       setEditorText(document.content.toString());
+      setBlocks(readBlocks(document.content));
       // A deleted note is shown from its local copy only; it must never reconnect.
       if (deletedIdsRef.current.has(noteId)) return;
       setEditable(true);
@@ -411,14 +423,30 @@ export default function Home() {
   // The menu entries Edit → Undo/Redo and mobile gestures arrive as native beforeinput events.
   const bindHistoryInput = useCallback((element: HTMLTextAreaElement | null) => {
     if (!element) return;
+    textareaRef.current = element;
     const onBeforeInput = (event: InputEvent) => {
       if (event.inputType !== 'historyUndo' && event.inputType !== 'historyRedo') return;
       event.preventDefault();
       stepHistory(element, event.inputType === 'historyUndo' ? 'undo' : 'redo');
     };
     element.addEventListener('beforeinput', onBeforeInput);
-    return () => element.removeEventListener('beforeinput', onBeforeInput);
+    return () => { element.removeEventListener('beforeinput', onBeforeInput); if (textareaRef.current === element) textareaRef.current = null; };
   }, [stepHistory]);
+
+  /** Applies a mark to what is selected in the textarea; the CRDT change is synced like any other edit. */
+  function formatSelection(apply: (document: EditorDocument, start: number, end: number) => boolean, emptyMessage = 'Selecciona primero el texto al que quieres dar formato.') {
+    const document = documentRef.current;
+    const element = textareaRef.current;
+    if (!document || !element || element.readOnly || element.disabled) return false;
+    const applied = apply(document, element.selectionStart, element.selectionEnd);
+    setFormatError(applied ? '' : emptyMessage);
+    return applied;
+  }
+
+  function submitLink() {
+    const applied = formatSelection((document, start, end) => setLink(document, start, end, linkUrl), 'Escribe una dirección http(s):// o mailto: y selecciona el texto del enlace.');
+    if (applied) { setLinkOpen(false); setLinkUrl(''); }
+  }
 
   async function logout() {
     invalidateOfflineIdentity(); clearPrivateUI(); setError('');
@@ -451,7 +479,7 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       <section className="workspace-grid">
         <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form></aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3>{selectedNote.title}</h3></div>{!deleted && !incompatible && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{incompatible && <div className="incompatible-note" role="alert"><p><strong>Esta nota usa un formato más nuevo que esta versión de SyncPad.</strong> {incompatible === 'local' ? 'La copia de este dispositivo no se ha abierto ni modificado.' : 'Se ha dejado de sincronizar y no se ha aplicado nada del servidor.'} Recarga la aplicación para actualizarla; no se ha perdido nada.{incompatible === 'remote' && pending && ' Tus últimos cambios siguen guardados solo en este dispositivo.'}</p>{incompatible === 'remote' && <div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button></div>}</div>}{!deleted && !incompatible && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable && !deleted && !incompatible} readOnly={deleted || incompatible !== null} value={editorText} onChange={(event) => editContent(event.target.value)} onKeyDown={historyKey} ref={bindHistoryInput} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{orphans.length > 0 && <div className="orphan-list"><p className="eyebrow">Eliminadas en el servidor</p>{orphans.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote?.id !== note.id) openOrphan(note); }}><strong>{note.title}</strong><small>Copia local recuperable</small></button>)}</div>}{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">{deleted ? 'Eliminada' : 'Editando'}</p><h3>{selectedNote.title}</h3></div>{!deleted && !incompatible && <NoteSyncStatus state={syncState} retry={retrySync} networkOnline={networkOnline} />}</div>{deleted && <div className="deleted-note" role="alert"><p><strong>Esta nota se eliminó en el servidor.</strong> Tu copia sigue en este dispositivo y ya no se sincroniza.{pending && ' Incluye cambios que nunca llegaron al servidor.'}</p><div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button><button type="button" onClick={() => void discardLocalCopy()}>Descartar copia local</button></div></div>}{incompatible && <div className="incompatible-note" role="alert"><p><strong>Esta nota usa un formato más nuevo que esta versión de SyncPad.</strong> {incompatible === 'local' ? 'La copia de este dispositivo no se ha abierto ni modificado.' : 'Se ha dejado de sincronizar y no se ha aplicado nada del servidor.'} Recarga la aplicación para actualizarla; no se ha perdido nada.{incompatible === 'remote' && pending && ' Tus últimos cambios siguen guardados solo en este dispositivo.'}</p>{incompatible === 'remote' && <div className="actions"><button type="button" onClick={downloadLocalCopy}>Descargar copia (.txt)</button></div>}</div>}{!deleted && !incompatible && pending && <p className="pending">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}{syncError && <p className="error" role="alert">{syncError}</p>}{!deleted && !incompatible && <div className="format-toolbar" role="toolbar" aria-label="Formato" onMouseDown={(event) => { if ((event.target as HTMLElement).tagName !== 'INPUT') event.preventDefault(); }}><button type="button" disabled={!editable} onClick={() => formatSelection(toggleBold)} aria-label="Negrita"><strong>N</strong></button><button type="button" disabled={!editable} onClick={() => formatSelection((document, start, end) => toggleList(document, start, end))} aria-label="Lista">• Lista</button><button type="button" disabled={!editable} aria-expanded={linkOpen} onClick={() => setLinkOpen(open => !open)} aria-label="Enlace">Enlace</button><button type="button" disabled={!editable} onClick={() => formatSelection(removeLink)} aria-label="Quitar enlace">Quitar enlace</button></div>}{linkOpen && !deleted && !incompatible && <form className="link-form" onSubmit={(event) => { event.preventDefault(); submitLink(); }}><input aria-label="Dirección del enlace" type="url" placeholder="https://" value={linkUrl} onChange={(event) => setLinkUrl(event.target.value)} /><button type="submit">Aplicar enlace</button></form>}{formatError && <p className="format-hint" role="status">{formatError}</p>}<textarea aria-label="Contenido de la nota" disabled={!editable && !deleted && !incompatible} readOnly={deleted || incompatible !== null} value={editorText} onChange={(event) => editContent(event.target.value)} onKeyDown={historyKey} ref={bindHistoryInput} placeholder="Escribe el contenido de la nota..." />{editorText && <RichPreview blocks={blocks} />}</article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );

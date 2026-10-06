@@ -306,3 +306,53 @@ p {
   border-left: 0.25rem solid #355b6b;
   background: #e7edf1;
 }
+.format-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.format-toolbar button {
+  padding: 0.3rem 0.7rem;
+}
+
+.link-form {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.link-form input {
+  flex: 1;
+}
+
+.format-hint {
+  color: #6b4a0c;
+  font-size: 0.9rem;
+  margin: 0 0 0.5rem;
+}
+
+.rich-preview {
+  background: #f7fafb;
+  border: 1px solid #d5e0e5;
+  border-radius: 0.3rem;
+  line-height: 1.6;
+  margin-top: 0.75rem;
+  overflow-wrap: anywhere;
+  padding: 0.75rem 1rem;
+}
+
+.rich-preview p,
+.rich-preview ul {
+  margin: 0 0 0.5rem;
+}
+
+.rich-preview ul {
+  padding-left: 1.4rem;
+}
+
+.rich-preview a {
+  color: #1d5f8a;
+  text-decoration: underline;
+}
