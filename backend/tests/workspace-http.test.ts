@@ -15,7 +15,7 @@ function fixture() {
     async authenticate() { return user; },
     async createSession() { return 'session-token'; },
     async getUserBySession(token) { return token === 'session-token' ? user : null; },
-    async invalidateSession() {},
+    async invalidateSession() { },
   };
   const workspaces: WorkspaceService = {
     async create() { return workspace; },
@@ -23,7 +23,7 @@ function fixture() {
     async getForUser(userId, workspaceId) { return userId === user.id && workspaceId === workspace.id ? workspace : null; },
     async invite() { return { workspaceId: workspace.id, email: 'member@example.com', token: 'invite-token' }; },
     async acceptInvitation() { return workspace.id; },
-    async removeMember() {},
+    async removeMember() { },
   };
   const app = createSyncServer({ auth, workspaces, security: loadSecurityConfig({}) });
   app.server.listen(0, '127.0.0.1');

@@ -42,3 +42,21 @@ test('other websocket paths are rejected', { timeout: 3000 }, async (t) => {
   const [error] = await once(client, 'error');
   assert.match(error.message, /Unexpected server response: 404/);
 });
+test('CORS preflight permits note mutations only from the configured origin', { timeout: 3000 }, async (t) => {
+  const origin = 'http://127.0.0.1:3000';
+  const app = createSyncServer({ security: { corsOrigin: origin, cookieSecure: false, cookieSameSite: 'Lax' } });
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  t.after(() => app.close());
+  const url = 'http://127.0.0.1:' + (app.server.address() as AddressInfo).port + '/notes/123e4567-e89b-12d3-a456-426614174001';
+  for (const method of ['PATCH', 'DELETE']) {
+    const response = await fetch(url, { method: 'OPTIONS', headers: { origin, 'access-control-request-method': method, 'access-control-request-headers': 'content-type,x-csrf-token' } });
+    assert.equal(response.status, 204);
+    assert.equal(response.headers.get('access-control-allow-origin'), origin);
+    assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+    assert.ok(response.headers.get('access-control-allow-methods')?.split(',').includes(method));
+  }
+  const denied = await fetch(url, { method: 'OPTIONS', headers: { origin: 'https://untrusted.example', 'access-control-request-method': 'PATCH' } });
+  assert.equal(denied.status, 403);
+  assert.equal(denied.headers.get('access-control-allow-origin'), null);
+});

@@ -56,7 +56,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       applyCors(res, origin, options.security);
       if (req.method === 'OPTIONS') {
         res.writeHead(204, {
-          'access-control-allow-methods': 'GET,POST,OPTIONS',
+          'access-control-allow-methods': 'GET,POST,PATCH,DELETE,OPTIONS',
           'access-control-allow-headers': 'content-type,x-csrf-token',
         }).end();
         return;
