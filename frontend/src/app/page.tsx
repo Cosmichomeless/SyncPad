@@ -56,13 +56,16 @@ export default function Home() {
       invalidateOfflineIdentity(); clearPrivateUI();
       await clearUserMetadata(identity.user.id);
     } else if (cause instanceof HttpError && [403, 404].includes(cause.status)) {
+      workspaceRequestRef.current++;
       if (workspaceId) {
         if (workspaceRef.current?.id === workspaceId) {
+          navigationRef.current++;
           workspaceRef.current = null; setSelectedWorkspace(null); setNotes([]); setSelectedNote(null);
         }
         setWorkspaces(current => current.filter(row => row.id !== workspaceId));
         await removeWorkspace(identity.user.id, workspaceId);
       } else {
+        navigationRef.current++;
         workspaceRef.current = null; setSelectedWorkspace(null); setWorkspaces([]); setNotes([]); setSelectedNote(null);
         await clearUserMetadata(identity.user.id);
       }
