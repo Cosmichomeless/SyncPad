@@ -355,3 +355,12 @@ solo decorativo. «Al día» solo aparece tras el `ack` del servidor. Mientras n
 se esté al día hay un botón «Reintentar conexión» que no toca el documento local
 (deshabilitado, con motivo, si el navegador no tiene red). Detalle y evidencia en
 [docs/issues/029-sync-status.md](docs/issues/029-sync-status.md).
+
+## Pruebas E2E sin red (#31)
+
+`cd e2e && npm run install:browsers && npm test` ejecuta en Chromium dos clientes
+reales contra el backend y PostgreSQL: uno pierde la red, edita y recarga sin
+conexión mientras el otro sigue editando; al volver la red ambos convergen en el
+mismo contenido y en estado *Al día*. Requiere el stack local en `:4000/:4001`
+(o lo levanta la propia configuración). Detalle y evidencia, incluida una prueba
+de mutación, en [docs/issues/031-offline-e2e.md](docs/issues/031-offline-e2e.md).
