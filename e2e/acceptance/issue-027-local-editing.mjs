@@ -20,7 +20,7 @@ await page.getByRole('button', { name: 'Crear', exact: true }).click();
 await page.getByLabel('Nueva nota').fill('Nota local');
 await page.getByRole('button', { name: 'Añadir' }).click();
 const editor = page.getByRole('textbox', { name: 'Contenido de la nota' });
-await page.waitForFunction(() => document.body.innerText.includes('Editando · conectado'));
+await page.waitForFunction(() => document.body.innerText.includes('Editando · al día'));
 await editor.fill('base conectada');
 
 // Second tab sees the connected edit (incremental update is forwarded)

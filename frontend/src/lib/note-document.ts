@@ -14,15 +14,26 @@ export function createEditorDocument(): EditorDocument {
   return { doc, content: doc.getText('content') };
 }
 
-export function applyEditorUpdate(document: Y.Doc, update: Uint8Array) {
-  Y.applyUpdate(document, update);
+export const LOCAL_EDIT_ORIGIN = Symbol('syncpad.local-edit');
+/** Origin for updates that arrive from the server; they never count as pending local work. */
+export const REMOTE_ORIGIN = Symbol('syncpad.remote');
+
+export function applyEditorUpdate(document: Y.Doc, update: Uint8Array, origin?: unknown) {
+  Y.applyUpdate(document, update, origin);
 }
 
 export function encodeEditorState(document: Y.Doc) {
   return Y.encodeStateAsUpdate(document);
 }
 
-export const LOCAL_EDIT_ORIGIN = Symbol('syncpad.local-edit');
+export function encodeEditorStateVector(document: Y.Doc) {
+  return Y.encodeStateVector(document);
+}
+
+/** Everything the holder of `vector` is missing, including the delete set. */
+export function encodeEditorStateSince(document: Y.Doc, vector: Uint8Array) {
+  return Y.encodeStateAsUpdate(document, vector);
+}
 
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;

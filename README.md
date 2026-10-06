@@ -333,5 +333,16 @@ Escribir es local-first: cada cambio se aplica como un splice mínimo sobre
 `Y.Text` (sin reemplazar el documento entero) y se guarda en IndexedDB antes de
 depender del WebSocket. Sin conexión se puede seguir escribiendo; la UI muestra
 un aviso de cambios pendientes y el texto sobrevive a recargas. El envío al
-reconectar llega con #28. Detalle y evidencia en
+reconectar llega con #28 (ver más abajo). Detalle y evidencia en
 [docs/issues/027-local-editing.md](docs/issues/027-local-editing.md).
+
+## Reconciliación al reconectar (#28)
+
+Al volver la red, cada cliente envía su vector de estado Yjs; el servidor
+responde con lo que falta y el cliente sube lo que el servidor no tiene. Los
+cambios de ambos lados se fusionan (incluidos borrados) y repetir el handshake
+no duplica contenido. El servidor solo confirma (`ack`) un update cuando ya es
+durable en PostgreSQL, y el cliente solo se declara «al día» tras ese ack. Si
+falla el transporte se reintenta con backoff exponencial conservando el
+documento local. Detalle y evidencia en
+[docs/issues/028-reconnection.md](docs/issues/028-reconnection.md).

@@ -42,13 +42,30 @@ export type SyncHandshake = {
   noteId: NoteId;
 };
 
+/** Messages a client may send. `requestId` is optional so legacy clients keep working. */
+export type ClientSyncMessage =
+  | { type: 'sync-request'; requestId?: string; stateVector?: string }
+  | { type: 'update'; requestId?: string; update: string }
+  | { type: 'awareness' };
+
+export type SyncErrorCode = 'persistence-unavailable' | 'invalid-message';
+
+/** Messages the server sends. `ack` is emitted only after the update is durably appended. */
+export type ServerSyncMessage =
+  | { type: 'sync'; requestId?: string; update: string; stateVector: string }
+  | { type: 'update'; update: string }
+  | { type: 'ack'; requestId: string }
+  | { type: 'sync-error'; requestId?: string; code: SyncErrorCode; retryable: boolean };
+
 export {
   applyNoteUpdate,
   assertNoteDocument,
+  assertValidNoteUpdate,
   createNoteDocument,
   DOCUMENT_SCHEMA_VERSION,
   encodeNoteState,
   encodeNoteStateSince,
+  encodeNoteStateVector,
   NOTE_CONTENT_NAME,
   NOTE_ROOT_NAME,
 } from './document.js';

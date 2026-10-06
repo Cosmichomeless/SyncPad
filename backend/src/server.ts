@@ -4,8 +4,8 @@ import type { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { WebSocketServer } from 'ws';
 import type WebSocket from 'ws';
-import type { HealthResponse } from '@syncpad/shared';
-import { applyNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince } from '@syncpad/shared';
+import type { ClientSyncMessage, HealthResponse, ServerSyncMessage } from '@syncpad/shared';
+import { applyNoteUpdate, assertValidNoteUpdate, createNoteDocument, encodeNoteState, encodeNoteStateSince, encodeNoteStateVector } from '@syncpad/shared';
 import type { NoteId } from '@syncpad/shared';
 import { handleAuthRequest } from './auth-http.js';
 import type { AuthService } from './auth.js';
@@ -26,15 +26,20 @@ function rejectUpgrade(socket: Duplex, status: number) {
   socket.end(`HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : 'Forbidden'}\r\nConnection: close\r\n\r\n`);
 }
 
-type RoomMessage =
-  | { type: 'sync-request'; stateVector?: string }
-  | { type: 'update'; update: string }
-  | { type: 'awareness' };
-
 type NoteRoom = {
   document: ReturnType<typeof createNoteDocument>;
   clients: Map<WebSocket, { connectionId: string; userId: string; email: string }>;
+  /** Serializes snapshots and updates so a snapshot never overtakes an append in flight. */
+  queue: Promise<void>;
 };
+
+function enqueue(room: NoteRoom, task: () => Promise<void>) {
+  const run = room.queue.then(task);
+  room.queue = run.catch(() => {});
+  return run;
+}
+
+const MAX_REQUEST_ID_LENGTH = 128;
 
 function encode(data: Uint8Array) {
   return Buffer.from(data).toString('base64');
@@ -98,13 +103,16 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     let room = rooms.get(noteId);
     if (!room) {
       room = (async () => {
-        const created = { document: createNoteDocument(), clients: new Map<WebSocket, { connectionId: string; userId: string; email: string }>() };
+        const created: NoteRoom = { document: createNoteDocument(), clients: new Map(), queue: Promise.resolve() };
         if (options.syncStore) {
           for (const update of await options.syncStore.load(noteId)) applyNoteUpdate(created.document.doc, update);
         }
         return created;
       })();
       rooms.set(noteId, room);
+      // A failed load must not be cached: the next connection retries it.
+      const loading = room;
+      loading.catch(() => { if (rooms.get(noteId) === loading) rooms.delete(noteId); });
     }
     return room;
   };
@@ -142,51 +150,98 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           return;
         }
       }
-      wss.handleUpgrade(req, socket, head, async (client) => {
-        if (!options.auth || !options.notes) {
-          client.on('error', () => client.terminate());
-          return;
-        }
+      wss.handleUpgrade(req, socket, head, (client) => {
+        client.on('error', () => client.terminate());
+        if (!options.auth || !options.notes) return;
         const noteIdValue = new URL(req.url ?? '/ws', `http://${req.headers.host ?? 'localhost'}`).searchParams.get('noteId');
         const noteId = noteIdValue && isNoteId(noteIdValue) ? noteIdValue : undefined;
-        const room = noteId ? await getRoom(noteId) : undefined;
-        if (!room) {
+        if (!noteId) {
           client.close(1008, 'noteId is required');
           return;
         }
         const connectionId = randomUUID();
         const participant = { connectionId, userId: roomUser?.id ?? 'anonymous', email: roomUser?.email ?? 'anonymous' };
-        room.clients.set(client, participant);
-        client.send(JSON.stringify({ type: 'sync', update: encode(encodeNoteState(room.document.doc)) }));
-        const broadcastAwareness = () => {
+        const send = (message: ServerSyncMessage) => {
+          if (client.readyState === client.OPEN) client.send(JSON.stringify(message));
+        };
+        const broadcastAwareness = (room: NoteRoom) => {
           const payload = JSON.stringify({ type: 'awareness', users: [...room.clients.values()] });
           for (const peer of room.clients.keys()) if (peer.readyState === peer.OPEN) peer.send(payload);
         };
-        broadcastAwareness();
-        client.on('message', async (raw) => {
-          try {
-            const message = JSON.parse(raw.toString()) as RoomMessage;
-            if (message.type === 'sync-request') {
-              const update = message.stateVector
-                ? encodeNoteStateSince(room.document.doc, decode(message.stateVector))
-                : encodeNoteState(room.document.doc);
-              client.send(JSON.stringify({ type: 'sync', update: encode(update) }));
+        const snapshot = (room: NoteRoom, requestId?: string, since?: Uint8Array): ServerSyncMessage => ({
+          type: 'sync',
+          ...(requestId ? { requestId } : {}),
+          update: encode(since ? encodeNoteStateSince(room.document.doc, since) : encodeNoteState(room.document.doc)),
+          stateVector: encode(encodeNoteStateVector(room.document.doc)),
+        });
+        const persistUpdate = async (room: NoteRoom, update: Uint8Array, encoded: string, requestId?: string) => {
+          assertValidNoteUpdate(room.document.doc, update);
+          if (options.syncStore) {
+            try {
+              await options.syncStore.append(noteId, update);
+            } catch {
+              send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: 'persistence-unavailable', retryable: true });
               return;
             }
-            if (message.type === 'update') {
-              const update = decode(message.update);
-              applyNoteUpdate(room.document.doc, update);
-              if (options.syncStore && noteId) await options.syncStore.append(noteId, update);
-              const payload = JSON.stringify({ type: 'update', update: message.update });
-              for (const [peer] of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
+          }
+          applyNoteUpdate(room.document.doc, update);
+          const payload = JSON.stringify({ type: 'update', update: encoded });
+          for (const [peer] of room.clients) if (peer !== client && peer.readyState === peer.OPEN) peer.send(payload);
+          if (!requestId) return;
+          // Without a durable store the update is live but must not be reported as saved.
+          if (options.syncStore) send({ type: 'ack', requestId });
+          else send({ type: 'sync-error', requestId, code: 'persistence-unavailable', retryable: false });
+        };
+        const handle = async (room: NoteRoom, raw: WebSocket.RawData) => {
+          let requestId: string | undefined;
+          try {
+            const message = JSON.parse(raw.toString()) as ClientSyncMessage;
+            if ('requestId' in message && message.requestId !== undefined) {
+              if (typeof message.requestId !== 'string' || message.requestId.length > MAX_REQUEST_ID_LENGTH) throw new Error('invalid requestId');
+              requestId = message.requestId;
             }
-            if (message.type === 'awareness') broadcastAwareness();
+            if (message.type === 'sync-request') {
+              const since = message.stateVector ? decode(message.stateVector) : undefined;
+              await enqueue(room, async () => send(snapshot(room, requestId, since)));
+            } else if (message.type === 'update') {
+              if (typeof message.update !== 'string') throw new Error('update must be a string');
+              const update = decode(message.update);
+              await enqueue(room, () => persistUpdate(room, update, message.update, requestId));
+            } else if (message.type === 'awareness') {
+              broadcastAwareness(room);
+            }
           } catch {
+            send({ type: 'sync-error', ...(requestId ? { requestId } : {}), code: 'invalid-message', retryable: false });
             client.close(1003, 'Invalid sync message');
           }
+        };
+        let closed = false;
+        // Listeners are attached before the room loads so an eager handshake is queued, not dropped.
+        let ready: Promise<NoteRoom | undefined> = getRoom(noteId).then(async (room) => {
+          if (closed) return undefined;
+          room.clients.set(client, participant);
+          await enqueue(room, async () => send(snapshot(room)));
+          broadcastAwareness(room);
+          return room;
+        }, () => {
+          send({ type: 'sync-error', code: 'persistence-unavailable', retryable: true });
+          client.close(1011, 'Note storage unavailable');
+          return undefined;
         });
-        client.once('close', () => { room.clients.delete(client); broadcastAwareness(); });
-        client.on('error', () => client.terminate());
+        client.on('message', (raw) => {
+          ready = ready.then(async (room) => {
+            if (room) await handle(room, raw);
+            return room;
+          });
+        });
+        client.once('close', () => {
+          closed = true;
+          void ready.then((room) => {
+            if (!room) return;
+            room.clients.delete(client);
+            broadcastAwareness(room);
+          });
+        });
       });
     })().catch(() => rejectUpgrade(socket, 403));
   });

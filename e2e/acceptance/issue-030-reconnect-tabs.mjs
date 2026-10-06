@@ -17,7 +17,7 @@ await p1.getByRole('button', { name: 'Crear', exact: true }).click();
 await p1.getByLabel('Nueva nota').fill('Nota C');
 await p1.getByRole('button', { name: 'Añadir' }).click();
 const ed = p1.getByRole('textbox', { name: 'Contenido de la nota' });
-await p1.waitForFunction(() => document.body.innerText.includes('Editando · conectado'));
+await p1.waitForFunction(() => document.body.innerText.includes('Editando · al día'));
 await ed.fill('contenido C');
 await p1.waitForTimeout(500);
 

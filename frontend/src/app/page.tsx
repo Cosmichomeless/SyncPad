@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { NoteSummary, WorkspaceSummary } from '@syncpad/shared';
-import { applyEditorUpdate, applyLocalTextEdit, createEditorDocument, LOCAL_EDIT_ORIGIN, type EditorDocument } from '../lib/note-document';
+import { applyLocalTextEdit, createEditorDocument, type EditorDocument } from '../lib/note-document';
+import { createNoteSync, type NoteSyncHandle, type SyncState } from '../lib/note-sync';
 import { persistNote } from '../lib/note-persistence';
 import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
@@ -10,11 +11,12 @@ import { clearUserMetadata, markVisited, readNotes, readVisitedNoteIds, readWork
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
 
-function toBase64(bytes: Uint8Array) {
-  let binary = '';
-  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
-  return btoa(binary);
-}
+const SYNC_LABELS: Record<SyncState, string> = {
+  offline: 'sin conexión',
+  reconnecting: 'reconectando',
+  syncing: 'sincronizando',
+  'up-to-date': 'al día',
+};
 
 export default function Home() {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
@@ -31,9 +33,9 @@ export default function Home() {
   const [editorText, setEditorText] = useState('');
   const [editable, setEditable] = useState(false);
   const [pending, setPending] = useState(false);
-  const [syncState, setSyncState] = useState<'desconectado' | 'conectando' | 'conectado'>('desconectado');
+  const [syncState, setSyncState] = useState<SyncState>('offline');
   const documentRef = useRef<EditorDocument | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
+  const syncRef = useRef<NoteSyncHandle | null>(null);
   const identityRef = useRef<OfflineIdentity | null>(null);
   const workspaceRef = useRef<WorkspaceSummary | null>(null);
   const noteRef = useRef<NoteSummary | null>(null);
@@ -46,14 +48,14 @@ export default function Home() {
     setEditorText('');
     setEditable(false);
     setPending(false);
-    setSyncState('desconectado');
+    setSyncState('offline');
     updateSelectedNote(note);
   }, []);
 
   const clearPrivateUI = useCallback(() => {
     identityRef.current = null; workspaceRef.current = null;
     navigationRef.current++; authRequestRef.current++; workspaceRequestRef.current++;
-    socketRef.current?.close(); socketRef.current = null;
+    syncRef.current?.destroy(); syncRef.current = null;
     documentRef.current = null;
     setUser(null); setWorkspaces([]); setNotes([]); setSelectedWorkspace(null); setSelectedNote(null);
     setWorkspaceName(''); setNoteTitle(''); setPassword(''); setEmail('');
@@ -262,17 +264,12 @@ export default function Home() {
     const persistence = persistNote(userId, noteId, document.doc, () => {
       if (!cancelled && isCurrentIdentity(identity)) setError('No se pudo guardar en el almacenamiento local');
     });
-    let socket: WebSocket | null = null;
+    let sync: NoteSyncHandle | null = null;
     documentRef.current = document;
     const observeContent = () => {
       if (hydrated && !cancelled && isCurrentIdentity(identity)) setEditorText(document.content.toString());
     };
     document.content.observe(observeContent);
-    const forwardLocalUpdate = (update: Uint8Array, origin: unknown) => {
-      if (origin !== LOCAL_EDIT_ORIGIN || !socket || socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ type: 'update', update: toBase64(update) }));
-    };
-    document.doc.on('update', forwardLocalUpdate);
     void persistence.whenSynced.then(async () => {
       if (cancelled || !isCurrentIdentity(identity)) return;
       await markVisited(identity, note).catch(cause => cacheFailure(cause, identity));
@@ -280,32 +277,23 @@ export default function Home() {
       hydrated = true;
       setEditorText(document.content.toString());
       setEditable(true);
-      setSyncState('conectando');
-      const connection = new WebSocket(`${WS_URL}?noteId=${noteId}`);
-      socket = connection;
-      socketRef.current = connection;
-      connection.onopen = () => {
-        if (cancelled || !isCurrentIdentity(identity)) return;
-        setSyncState('conectado');
-        connection.send(JSON.stringify({ type: 'sync-request' }));
-      };
-      connection.onmessage = (event) => {
-        if (cancelled || !isCurrentIdentity(identity)) return;
-        const message = JSON.parse(event.data as string) as { type: string; update?: string };
-        if (message.update && (message.type === 'sync' || message.type === 'update')) {
-          applyEditorUpdate(document.doc, Uint8Array.from(atob(message.update), (character) => character.charCodeAt(0)));
-        }
-      };
-      connection.onclose = () => { if (!cancelled && isCurrentIdentity(identity)) setSyncState('desconectado'); };
+      const current = () => !cancelled && isCurrentIdentity(identity);
+      sync = createNoteSync({
+        document,
+        url: `${WS_URL}?noteId=${noteId}`,
+        onState: (state) => { if (current()) setSyncState(state); },
+        onPending: (value) => { if (current()) setPending(value); },
+        onError: (message) => { if (current()) setError(message); },
+      });
+      syncRef.current = sync;
     }).catch(() => {
       if (!cancelled && isCurrentIdentity(identity)) setError('No se pudo abrir el almacenamiento local');
     });
     return () => {
       cancelled = true;
       document.content.unobserve(observeContent);
-      document.doc.off('update', forwardLocalUpdate);
-      socket?.close();
-      if (socketRef.current === socket) socketRef.current = null;
+      sync?.destroy();
+      if (syncRef.current === sync) syncRef.current = null;
       if (documentRef.current === document) documentRef.current = null;
       void persistence.destroy().then(
         () => document.doc.destroy(),
@@ -318,7 +306,7 @@ export default function Home() {
     const identity = identityRef.current;
     const document = documentRef.current;
     if (!identity || !isCurrentIdentity(identity) || !document) return;
-    if (applyLocalTextEdit(document, value)) setPending(true);
+    applyLocalTextEdit(document, value);
     setEditorText(document.content.toString());
   }
 
@@ -353,7 +341,7 @@ export default function Home() {
       <p className="welcome">{user.email}</p>
       <section className="workspace-grid">
         <aside className="panel sidebar"><h2>Workspaces</h2><div className="stack">{workspaces.map((workspace) => <button className={selectedWorkspace?.id === workspace.id ? 'list-item active' : 'list-item'} key={workspace.id} onClick={() => void selectWorkspace(workspace)}>{workspace.name}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); void createWorkspace(); }}><input aria-label="Nuevo workspace" placeholder="Nuevo workspace" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} required /><button disabled={busy} type="submit">Crear</button></form></aside>
-        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {syncState}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={syncState} /></div>{pending && <p className="pending" role="status">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}<textarea aria-label="Contenido de la nota" disabled={!editable} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
+        <section className="panel notes-panel"><div className="section-heading"><div><p className="eyebrow">{selectedWorkspace?.name ?? 'Workspace'}</p><h2>Notas</h2></div>{selectedWorkspace && <form className="inline-form" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input aria-label="Nueva nota" placeholder="Nueva nota" value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} required /><button disabled={busy} type="submit">Añadir</button></form>}</div>{!selectedWorkspace && <p className="empty">Crea un workspace para empezar.</p>}{selectedWorkspace && !notes.length && <p className="empty">Este workspace todavía no tiene notas.</p>}<div className="note-list">{notes.map((note) => <button className={selectedNote?.id === note.id ? 'note-card active' : 'note-card'} key={note.id} onClick={() => { if (selectedNote !== note) setSelectedNote(note); }}><strong>{note.title}</strong><small>Actualizada {new Date(note.updatedAt).toLocaleDateString('es-ES')}</small></button>)}</div>{selectedNote && <article className="editor-preview"><div className="editor-heading"><div><p className="eyebrow">Editando · {SYNC_LABELS[syncState]}</p><h3>{selectedNote.title}</h3></div><span className="sync-dot" aria-label={SYNC_LABELS[syncState]} /></div>{pending && <p className="pending" role="status">Cambios locales guardados en este dispositivo; pendientes de confirmar con el servidor.</p>}<textarea aria-label="Contenido de la nota" disabled={!editable} value={editorText} onChange={(event) => editContent(event.target.value)} placeholder="Escribe el contenido de la nota..." /></article>}{error && <p className="error" role="alert">{error}</p>}</section>
       </section>
     </main>
   );

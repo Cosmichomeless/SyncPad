@@ -32,6 +32,11 @@ export function encodeNoteState(doc: Y.Doc) {
   return Y.encodeStateAsUpdate(doc);
 }
 
+export function encodeNoteStateVector(doc: Y.Doc) {
+  assertNoteDocument(doc);
+  return Y.encodeStateVector(doc);
+}
+
 export function encodeNoteStateSince(doc: Y.Doc, stateVector: Uint8Array) {
   assertNoteDocument(doc);
   return Y.encodeStateAsUpdate(doc, stateVector);
@@ -40,4 +45,18 @@ export function encodeNoteStateSince(doc: Y.Doc, stateVector: Uint8Array) {
 export function applyNoteUpdate(doc: Y.Doc, update: Uint8Array) {
   Y.applyUpdate(doc, update);
   assertNoteDocument(doc);
+}
+
+/**
+ * Checks that `update` applies cleanly on top of `doc` and keeps the note
+ * schema valid, without touching `doc`. Used before an update is made durable.
+ */
+export function assertValidNoteUpdate(doc: Y.Doc, update: Uint8Array) {
+  const trial = new Y.Doc();
+  try {
+    Y.applyUpdate(trial, Y.encodeStateAsUpdate(doc));
+    applyNoteUpdate(trial, update);
+  } finally {
+    trial.destroy();
+  }
 }
