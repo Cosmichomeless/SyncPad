@@ -1,366 +1,134 @@
-# SyncPad — Offline Collaborative Workspace
-   Proyecto experimental orientado a sistemas en tiempo real y sincronización distribuida.
-Objetivo:
-Crear un workspace de notas/documentos colaborativos tipo mini Notion/Google Docs que funcione en tiempo real y también offline.
-Stack previsto:
-- Next.js
-- React
-- TypeScript
-- WebSockets
-- IndexedDB
-- Yjs o CRDTs
-Conceptos a aprender:
-- WebSockets
-- Real-time systems
-- Optimistic UI
-- Offline-first
-- Eventual consistency
-- Sincronización
-- Distributed state
-- Conflict resolution
-- CRDTs
-- IndexedDB
-- Network failures
-Quiero entender realmente cómo se resuelven conflictos cuando dos clientes modifican información mientras alguno está offline.
+<div align="center">
 
-## Frontend local
+# SyncPad
 
-Requisitos: Node.js 22.16 o posterior de la rama 22 y npm 10.9 de la rama 10.
-El frontend usa Next.js App Router, React y TypeScript estricto. La portada está
-en español y utiliza fuentes del sistema, sin servicios externos.
+**Notas colaborativas que se editan entre varias personas y siguen funcionando sin conexión.**
 
-Desde la raíz del repositorio:
+![Estado](https://img.shields.io/badge/estado-v1.0.0%20pendiente-orange)
+![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
+![Yjs](https://img.shields.io/badge/CRDT-Yjs-6C4AB6)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
+![Licencia](https://img.shields.io/badge/licencia-MIT-blue)
 
-```sh
-npm --prefix frontend ci
-npm --prefix frontend run dev
-```
+[Probarlo](#probarlo-en-un-comando) · [Capturas](#capturas) · [Arquitectura](#arquitectura) · [Limitaciones](#limitaciones-conocidas) · [Documentación](#documentación)
 
-Abrir la dirección local indicada por Next.js (puerto 3000 por defecto).
-Para producción local: ejecutar primero build y después start.
+</div>
+
+SyncPad es un editor de notas en tiempo real construido sobre un CRDT (Yjs). Demuestra que varias réplicas pueden editar la misma nota, también sin red, y converger al mismo texto sin perder el trabajo de nadie.
+
+## Qué incluye
+
+- **Edición simultánea** de una nota entre varias personas, con presencia y cursores de los demás.
+- **Modo sin conexión**: cada cambio se guarda en IndexedDB y se sincroniza al reconectar, con el estado visible («Pendiente», «Guardado»).
+- **Convergencia garantizada** por Yjs: las ramas divergentes se fusionan sin elegir un ganador, y deshacer solo afecta a las ediciones propias.
+- **Cuentas, workspaces e invitaciones** con permisos comprobados en el servidor, también para conexiones WebSocket ya abiertas.
+- **Texto con formato acotado** (negrita, enlaces y listas); el servidor rechaza cualquier otra marca.
+- **Pila completa en un comando** con Docker Compose: PostgreSQL, servidor de sincronización y web.
+
+## Probarlo en un comando
+
+> [!NOTE]
+> No hay demo pública desplegada: el hosting sigue sin decidir ([#64–#67](docs/issues/README.md)). Se ejecuta en local.
 
 ```sh
-npm --prefix frontend run lint
-npm --prefix frontend run typecheck
-npm --prefix frontend test
-npm --prefix frontend run build
-npm --prefix frontend run typecheck
-npm --prefix frontend run start
+docker compose up --build   # y abrir http://127.0.0.1:3000
 ```
 
-### Alcance y verificación de #1
+Necesita Docker. Abre la web con `127.0.0.1` y no con `localhost`, porque el servidor solo acepta ese origen. El [guion de demo](docs/demo-script.md) recorre el flujo completo con dos navegadores.
 
-La issue #1 entrega la base del frontend y una portada informativa. No hay editor,
-autenticación, colaboración ni persistencia offline implementados todavía.
+## Capturas
 
-Verificado con Node 22.16.0 y npm 10.9.2: lint y typecheck sin errores, test de
-renderizado real (1/1), build estático correcto y typecheck posterior correcto.
-El servidor de desarrollo respondió HTTP 200 con título SyncPad y HTTP 404 para
-una ruta desconocida. La revisión visual en navegador no se pudo ejecutar por
-ausencia de Chrome en el entorno. Los comandos exactos, resultados y las
-incidencias de instalación están en [la entrega de #1](docs/issues/001-frontend.md).
+Todas usan los mismos datos de ejemplo: Ana García y Luis Martín editan notas en el workspace «Equipo de producto».
 
-Si el caché npm compartido tiene errores EACCES, se verificó esta alternativa
-local (el directorio de caché está ignorado por Git):
+| | |
+| --- | --- |
+| **Acceso**<br>![Pantalla de acceso con los formularios de registro e inicio de sesión de SyncPad](docs/screenshots/01-login.png) | **Notas del workspace**<br>![Lista de notas del workspace Equipo de producto con el editor y la vista con formato](docs/screenshots/02-notas.png) |
+| **Edición colaborativa**<br>![Nota abierta con las etiquetas de las dos personas conectadas y el fragmento que está editando Luis resaltado](docs/screenshots/03-colaboracion.png) | **Sin conexión**<br>![Edición sin red con el aviso de cambios pendientes de sincronizar](docs/screenshots/04-sin-conexion.png) |
+| **Móvil**<br>![Editor de notas en un teléfono de 390 píxeles de ancho](docs/screenshots/05-movil.png) | |
+
+Se regeneran con datos sembrados en una base de datos desechable:
 
 ```sh
-npm --prefix frontend ci --cache frontend/.npm --no-audit --no-fund
+npm --prefix e2e run screenshots
 ```
 
-## Servidor local (#2)
+## Arquitectura
 
-En otra terminal, desde la raíz (Node.js 22.16+ de la rama 22):
-
-```sh
-npm --prefix backend ci
-npm --prefix backend run dev
+```mermaid
+flowchart LR
+    B["Navegador<br/>Next.js + Y.Doc local"] -->|"Sesión HttpOnly + CSRF"| H["API HTTP<br/>auth, workspaces, notas"]
+    B <-->|"WebSocket: sync, update, ack"| W["Salas por nota<br/>Y.Doc en memoria"]
+    B -->|"Updates de Yjs"| I[("IndexedDB<br/>por usuario y nota")]
+    H --> P[("PostgreSQL")]
+    W -->|"Registro de updates + snapshots"| P
 ```
 
-El backend es un proceso independiente de Next.js. HTTP y WebSocket comparten
-el puerto 3001: GET http://127.0.0.1:3001/health responde JSON y
-ws://127.0.0.1:3001/ws acepta conexiones. HOST y PORT permiten cambiar la
-dirección y puerto; por defecto solo escucha en loopback.
+- **Navegador**: un `<textarea>` enlazado a un `Y.Doc`; cada edición se guarda en IndexedDB antes de enviarse, y un service worker cubre solo el shell anónimo.
+- **Servidor**: HTTP para cuentas y permisos, y una sala WebSocket por nota con cola serializada y límites de tamaño y frecuencia.
+- **PostgreSQL**: el registro de updates es la fuente de verdad; los snapshots (uno cada 100 updates) solo aceleran la carga.
 
-Esta base todavía no autentica conexiones ni sincroniza documentos. No exponer
-a Internet; el WebSocket no procesa mensajes de aplicación. El cierre mediante
-Ctrl+C o SIGTERM solicita desconexión y fuerza sockets pendientes tras un segundo.
+Más detalle en [`docs/architecture.md`](docs/architecture.md).
 
-```sh
-npm --prefix backend run lint
-npm --prefix backend run typecheck
-npm --prefix backend test
-npm --prefix backend run build
-npm --prefix backend start
+## Decisiones de diseño
+
+| Decisión | Por qué | Coste |
+| --- | --- | --- |
+| **Yjs (CRDT)** en vez de transformación operacional o «último gana» | Las ediciones offline convergen sin servidor que ordene y no se pierde trabajo | El historial crece y el formato por bloques exigiría un esquema v2 |
+| **Registro de updates con `ack`** en vez de guardar solo el documento final | «Guardado» significa guardado; las reconexiones son baratas e idempotentes | Cada cambio es una escritura; los snapshots se añaden aparte para cargar rápido |
+| **IndexedDB nativo** en vez de `y-indexeddb` | Los errores de apertura y lectura se pueden manejar y no hay promesas colgadas | Código propio que mantener y sin compactación en el cliente |
+| **Service worker solo para el shell anónimo** en vez de cachear la aplicación entera | El caché del navegador no puede filtrar datos de una cuenta | La primera visita siempre necesita red |
+| **Datos locales por usuario y sin cifrar** en vez de borrarlos al cerrar sesión | Se recupera el trabajo sin conexión y las cuentas no se mezclan | No protege frente a quien tenga acceso al perfil del navegador |
+| **Rich text como atributos de `Y.Text`** en vez de un árbol ProseMirror | Evita subir el esquema a v2 y rehacer deshacer y persistencia | Sin títulos, tablas ni otros bloques |
+
+## Limitaciones conocidas
+
+- **Una sola instancia del servidor**: las salas viven en memoria de un proceso. No hay escalado horizontal ni prueba con varias instancias.
+- **Rendimiento con muchos editores**: con 1 editor × 50 ediciones el p95 es de unos 240 ms (presupuesto: 250 ms); con 5 y 10 editores se supera. Medido con almacén en memoria en un Apple M4 Pro, no contra PostgreSQL desplegado ([#50](docs/issues/050-benchmark.md)).
+- **Sin cifrado en reposo** de la copia local ni compactación del IndexedDB en el cliente.
+- **Sin CSP ni cabeceras de seguridad HTTP**; se asume que las añade el proxy de despliegue.
+- **Accesibilidad revisada con el árbol de Playwright**, no con VoiceOver, NVDA ni axe-core. El tema oscuro y el zoom no se han revisado.
+- **El job `image` de CI** (construye el Dockerfile y ejecuta el humo) no se pudo ejecutar en local; su primera ejecución real será en GitHub.
+- **Sin despliegue real ni release**: no hay URL pública y la `v1.0.0` está pendiente.
+
+El seguimiento está en las [issues del repositorio](https://github.com/Cosmichomeless/SyncPad/issues). Lo que no figura aquí o allí no se promete.
+
+## Calidad
+
+- **Pruebas unitarias y de componentes**: 145 en el backend, 36 en `shared/`, 157 en el frontend y 2 del entrypoint compilado.
+- **Integración con PostgreSQL y WebSocket**: 16 pruebas sobre una base de datos nueva por prueba (migraciones, permisos, borrado, reinicio y reconstrucción).
+- **End-to-end**: 17 pruebas Playwright (Chromium) con tres clientes y reinicio del servidor. **No se ejecutan en CI**: se lanzan en local con `cd e2e && npx playwright test`.
+- **Humo**: `sh scripts/smoke.sh` levanta el stack y ejecuta 8 comprobaciones con dos clientes sincronizando una nota.
+- **CI** en GitHub Actions: `frontend.yml` (lint, tipos, pruebas, build) y `backend.yml` (lint, tipos, pruebas, migraciones, integración y un job `image` que construye el contenedor y repite la edición entre dos clientes). Las comprobaciones estáticas y unitarias se lanzan en local con `bash scripts/check.sh`.
+
+## Documentación
+
+| Documento | Contenido |
+| --- | --- |
+| [`docs/architecture.md`](docs/architecture.md) | Componentes, protocolo, modelo de datos, seguridad y límites |
+| [`docs/development.md`](docs/development.md) | Desarrollo local, comandos y notas por issue |
+| [`docs/demo-script.md`](docs/demo-script.md) | Guion para recorrer el producto con dos navegadores |
+| [`docs/issues/`](docs/issues/README.md) | Un documento por issue: objetivo, decisiones, verificación y límites |
+| [`.env.example`](.env.example) | Variables de entorno con sus valores locales |
+
+## Estructura
+
+```text
+backend/    Servidor Node.js (HTTP + WebSocket) y migraciones SQL
+frontend/   Next.js: editor, cliente de sincronización, IndexedDB y service worker
+shared/     Contratos comunes: esquema de documento v1 y política de rich text
+e2e/        Pruebas Playwright y generador de las capturas
+scripts/    check.sh, smoke.sh (humo local), smoke-stack.mts (humo del contenedor en CI)
+docs/       Arquitectura, guion de demo, desarrollo, capturas y una nota por issue
+.github/    Workflows de CI del frontend y del backend
+docker-compose.yml   PostgreSQL + servidor + web
 ```
 
-Evidencia y límites: [entrega de #2](docs/issues/002-backend.md).
+## Despliegue
 
-## PostgreSQL local (#3)
+- **Existe**: `backend/Dockerfile`, `frontend/Dockerfile` y `docker-compose.yml` para la pila completa, y el humo `scripts/smoke.sh` contra una instancia en marcha.
+- **No existe**: ninguna instancia pública, dominio, HTTPS ni configuración de producción verificada. Está pendiente de [#64–#68](docs/issues/README.md).
 
-Requisitos adicionales: Docker Desktop con Docker Compose, o PostgreSQL 14 o
-posterior instalado localmente.
+## Licencia
 
-Para iniciar la base de datos incluida:
-
-```sh
-docker compose up -d postgres
-```
-
-La conexión local por defecto es
-`postgres://syncpad:syncpad@127.0.0.1:5432/syncpad`. El backend acepta una URL
-distinta mediante `DATABASE_URL`; `HOST` y `PORT` siguen controlando el servidor
-HTTP/WebSocket. La base de datos todavía solo prepara la infraestructura local:
-las tablas de aplicación se añadirán mediante las migraciones de #4.
-
-Para detener el servicio sin borrar los datos:
-
-```sh
-docker compose stop postgres
-```
-
-Para eliminar también el volumen local:
-
-```sh
-docker compose down -v
-```
-
-## Migraciones de esquema (#4)
-
-Con PostgreSQL iniciado, ejecuta las migraciones desde `backend/`:
-
-```sh
-npm --prefix backend run migrate
-```
-
-El runner crea `public.schema_migrations`, aplica los archivos SQL de
-`backend/migrations/` en orden lexicográfico y registra cada archivo aplicado
-dentro de la misma transacción. Repetir el comando es seguro y no vuelve a
-ejecutar migraciones ya registradas.
-
-## Contratos compartidos (#5)
-
-Los tipos públicos viven en `shared/src/index.ts` y se importan desde el backend
-y el frontend. Incluyen IDs nominales para usuarios, workspaces y notas, las
-respuestas de health/error, resúmenes de entidades y el handshake de sincronización.
-La constante `SYNC_PROTOCOL_VERSION` fija la versión inicial del protocolo en `1`.
-
-Estos contratos describen la API pública, pero no representan todavía tablas,
-autenticación ni contenido Yjs. Los cambios incompatibles deberán incrementar la
-versión del protocolo y documentar la migración.
-
-## Entorno local (#6)
-
-Copia la plantilla antes de iniciar servicios:
-
-```sh
-cp .env.example .env
-```
-
-`.env` está excluido de Git y `.env.example` solo contiene valores locales de
-ejemplo; no se guardan contraseñas reales ni tokens en el repositorio. Para
-iniciar PostgreSQL, aplicar migraciones y ejecutar el backend en modo watch:
-
-```sh
-./scripts/start-backend-local.sh
-```
-
-El frontend se ejecuta en otra terminal con `npm --prefix frontend run dev`.
-Para ejecutar las comprobaciones de ambos módulos:
-
-```sh
-./scripts/check.sh
-```
-
-## Arquitectura y puesta en marcha (#7)
-
-La descripción de componentes, responsabilidades, tipos de estado y flujo local
-está en [docs/architecture.md](docs/architecture.md). Distingue explícitamente
-los datos persistentes de la presencia efímera y marca qué partes son futuras.
-
-## Usuarios y sesiones (#8)
-
-La migración de acceso crea usuarios con email único y sesiones revocables:
-
-```sh
-npm --prefix backend run migrate
-```
-
-Las contraseñas se almacenan con `scrypt` y los tokens de sesión solo se guardan
-como hashes. Las rutas de registro, login y logout se incorporan en #9; no hay
-acceso público seguro hasta completar también #10.
-
-## API de acceso (#9)
-
-Con el backend y las migraciones activos, las rutas disponibles son:
-
-- `POST /auth/register` con `{ "email", "password" }` crea una cuenta e inicia sesión.
-- `POST /auth/login` inicia sesión con credenciales existentes.
-- `GET /auth/me` devuelve el usuario de la cookie de sesión.
-- `POST /auth/logout` revoca la sesión y limpia la cookie.
-
-La cookie es HttpOnly y SameSite=Lax en esta etapa. La política completa para
-producción, CSRF y CORS pertenece a #10.
-
-## Workspaces y memberships (#11)
-
-La migración `003-workspaces.sql` crea workspaces y memberships con roles `OWNER`
-y `MEMBER`. Crear un workspace asigna automáticamente al creador como `OWNER` y
-la pareja workspace/usuario es única.
-
-La API autenticada ofrece `POST /workspaces`, `GET /workspaces` y
-`GET /workspaces/:id`; el listado y el detalle solo devuelven memberships del
-usuario actual y la creación requiere CSRF.
-
-Los OWNER pueden invitar y eliminar miembros mediante las rutas documentadas en
-[docs/issues/013-member-invitations.md](docs/issues/013-member-invitations.md).
-Las invitaciones expiran, solo se aceptan una vez y no permiten eliminar al
-último OWNER.
-
-## Metadata de notas (#14)
-
-La migración `005-notes.sql` crea notas ligadas obligatoriamente a un workspace,
-con título, creador y `updated_at`. Las consultas siempre comprueban membership y
-ordenan el listado por modificación reciente; el contenido colaborativo aún no se
-guarda aquí.
-
-La API CRUD de notas está documentada en [docs/issues/015-note-crud.md](docs/issues/015-note-crud.md):
-los miembros pueden crear/listar y renombrar/borrar notas, mientras que las
-operaciones sobre workspaces ajenos se rechazan.
-
-Las invariantes de aislamiento y las pruebas de roles están documentadas en
-[docs/issues/017-isolation-tests.md](docs/issues/017-isolation-tests.md).
-
-## Documentos Yjs (#18)
-
-El esquema compartido versionado vive en `shared/src/document.ts`: cada nota
-contiene `schemaVersion` y `content`; el título sigue en PostgreSQL. Las
-actualizaciones incompatibles se rechazan para permitir migraciones explícitas.
-
-El endpoint WebSocket autoriza la sala mediante cookie de sesión, `noteId` y
-membership antes de aceptar el upgrade; este límite está documentado en
-[docs/issues/019-websocket-authorization.md](docs/issues/019-websocket-authorization.md).
-
-Las salas intercambian state vectors, snapshots Yjs y actualizaciones
-incrementales según [docs/issues/020-yjs-sync.md](docs/issues/020-yjs-sync.md).
-
-Las actualizaciones se reconstruyen desde `syncpad.note_updates` al abrir una
-sala y se deduplican por hash, como describe [docs/issues/021-yjs-persistence.md](docs/issues/021-yjs-persistence.md).
-
-La presencia de participantes es efímera y se difunde solo dentro de la sala,
-según [docs/issues/023-awareness.md](docs/issues/023-awareness.md).
-
-La prueba de convergencia y reinicio está documentada en
-[docs/issues/024-convergence-restart.md](docs/issues/024-convergence-restart.md):
-el contenido se restaura, pero la presencia antigua no.
-
-## Cookies, CSRF y CORS (#10)
-
-El origen permitido se configura con `CORS_ORIGIN`. Las mutaciones de acceso
-requieren el token de `GET /auth/csrf` en la cookie `syncpad_csrf` y en la cabecera
-`X-CSRF-Token`. `COOKIE_SECURE` y `COOKIE_SAME_SITE` controlan los atributos de
-las cookies; en producción las cookies Secure se activan por defecto.
-
-## UI de workspace (#16)
-
-La portada permite registrarse, entrar, crear y seleccionar workspaces, y crear,
-listar y abrir notas. El editor colaborativo se conectará cuando se complete la
-sincronización Yjs de #18–#22.
-
-La edición básica de una nota ya usa el documento Yjs y la sala WebSocket, con
-estado de conexión visible; el alcance está en [docs/issues/022-yjs-editor.md](docs/issues/022-yjs-editor.md).
-
-## Persistencia local de notas (#25)
-
-Las notas visitadas conservan su contenido Yjs en IndexedDB mediante
-un adaptador nativo, con claves separadas por usuario autenticado y nota y
-el esquema previo de updates intacto. El editor hidrata el documento antes
-de iniciar el WebSocket. Los errores de apertura/lectura rechazan `whenSynced`
-y muestran un error de almacenamiento en español; las escrituras fallidas
-también se notifican. El cierre espera las transacciones pendientes y cancela
-la hidratación obsoleta sin aplicar datos. Se verificaron 16/16 tests
-con persistencia real sobre fake-indexeddb, lint, typecheck, build y typecheck
-posterior sin errores (Node.js 22.16.0/npm 10.9.2).
-
-La entrega original no incluía recarga offline completa: dependía del shell
-de #26 y de la navegación/metadata de #30 (descrita más abajo). No se
-añaden reconexión ni edición desconectada, y la UI autenticada no se ejercitó
-en esta verificación. Se sustituyó `y-indexeddb` 9.0.12 tras reproducir sus
-rechazos no manejados y su promesa de hidratación pendiente ante errores.
-El registro de updates no se compacta automáticamente. #25 sigue
-abierta hasta verificar aceptación e integración. Evidencia y límites en
-[docs/issues/025-indexeddb.md](docs/issues/025-indexeddb.md).
-
-## Shell anónimo offline (#26, infraestructura)
-
-`npm --prefix frontend run build` genera `public/sw.js` y
-`public/offline-shell.html` desde la portada estática de Next. El registro se
-activa solo en producción, en un contexto seguro (HTTPS o localhost), y requiere
-una primera visita online para instalar el caché. Al perder la red, una
-navegación a `/` sin query puede cargar el formulario anónimo y los assets del
-build. No se guardan respuestas vivas de la portada, API, auth ni datos privados.
-
-Se verificaron tests del worker ejecutado en VM, lint, typecheck, build/postbuild
-y typecheck posterior. La prueba real de control del worker y recarga offline
-está pendiente; abrir notas visitadas tras recargar y verificar logout depende
-de #30. #26 sigue abierta: no se afirma aceptación offline completa. Evidencia,
-política del caché y límites en [docs/issues/026-app-shell.md](docs/issues/026-app-shell.md).
-
-## Navegación offline por usuario (#30)
-
-La portada recupera identidad local y metadata por usuario únicamente ante
-fallos de transporte. IndexedDB conserva títulos, workspaces y visitas;
-offline solo se ofrecen notas previamente hidratadas. Logout bloquea la UI
-local inmediatamente y notifica a otras pestañas, aunque no pueda revocar la
-cookie por falta de red. La recarga no desbloquea ese registro: requiere login
-explícito. No se guardan contraseñas, tokens ni respuestas HTTP privadas.
-
-Al volver online se valida la sesión y se refrescan resúmenes conservando la
-selección, sin recrear el documento Yjs. Las denegaciones no usan fallback y
-los recursos conocidos como eliminados/inaccesibles pierden su metadata local.
-Un fallo de persistencia/purga bloquea conservadoramente el acceso local para
-no reutilizar metadata potencialmente revocada. El caché no es cifrado ni
-borrado seguro del perfil compartido.
-
-Verificado con tests automáticos (frontend 57/57, lint, typecheck, build) y con
-aceptación en Chromium: recarga offline con contenido restaurado, logout
-offline y en dos pestañas, aislamiento entre cuentas y reconexión con metadata
-cambiada. #25/#26/#30 siguen abiertas hasta que las cierres. Evidencia en
-[docs/issues/030-offline-navigation.md](docs/issues/030-offline-navigation.md).
-
-## Edición local desconectada (#27)
-
-Escribir es local-first: cada cambio se aplica como un splice mínimo sobre
-`Y.Text` (sin reemplazar el documento entero) y se guarda en IndexedDB antes de
-depender del WebSocket. Sin conexión se puede seguir escribiendo; la UI muestra
-un aviso de cambios pendientes y el texto sobrevive a recargas. El envío al
-reconectar llega con #28 (ver más abajo). Detalle y evidencia en
-[docs/issues/027-local-editing.md](docs/issues/027-local-editing.md).
-
-## Reconciliación al reconectar (#28)
-
-Al volver la red, cada cliente envía su vector de estado Yjs; el servidor
-responde con lo que falta y el cliente sube lo que el servidor no tiene. Los
-cambios de ambos lados se fusionan (incluidos borrados) y repetir el handshake
-no duplica contenido. El servidor solo confirma (`ack`) un update cuando ya es
-durable en PostgreSQL, y el cliente solo se declara «al día» tras ese ack. Si
-falla el transporte se reintenta con backoff exponencial conservando el
-documento local. Detalle y evidencia en
-[docs/issues/028-reconnection.md](docs/issues/028-reconnection.md).
-
-## Estado de sincronización (#29)
-
-La cabecera de la nota muestra *Sin conexión*, *Reconectando*, *Sincronizando* o
-*Al día* en una única región accesible (`role="status"`), con un punto de color
-solo decorativo. «Al día» solo aparece tras el `ack` del servidor. Mientras no
-se esté al día hay un botón «Reintentar conexión» que no toca el documento local
-(deshabilitado, con motivo, si el navegador no tiene red). Detalle y evidencia en
-[docs/issues/029-sync-status.md](docs/issues/029-sync-status.md).
-
-## Pruebas E2E sin red (#31)
-
-`cd e2e && npm run install:browsers && npm test` ejecuta en Chromium dos clientes
-reales contra el backend y PostgreSQL: uno pierde la red, edita y recarga sin
-conexión mientras el otro sigue editando; al volver la red ambos convergen en el
-mismo contenido y en estado *Al día*. Requiere el stack local en `:4000/:4001`
-(o lo levanta la propia configuración). Detalle y evidencia, incluida una prueba
-de mutación, en [docs/issues/031-offline-e2e.md](docs/issues/031-offline-e2e.md).
+[MIT](LICENSE) © 2026 David Rodríguez

@@ -10,7 +10,8 @@ arquitectura completa está en [architecture.md](architecture.md).
 - **URL pública de la demo: pendiente de #64–#67.** Aún no hay decisión de
   hosting, así que este guion se ejecuta en local.
 - **Release v1.0.0: pendiente.**
-- Capturas y grabación de pantalla: pendientes (dependen de la demo).
+- Capturas: hay cinco en [`screenshots/`](screenshots/), generadas con datos
+  sembrados (véase el README). La grabación de pantalla sigue pendiente.
 
 ## Preparación (local)
 

@@ -9,7 +9,8 @@
   "scripts": {
     "install:browsers": "playwright install chromium",
     "test": "playwright test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "screenshots": "playwright test -c playwright.screenshots.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
