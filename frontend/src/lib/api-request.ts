@@ -1,4 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001';
+import { resolveApiUrl } from './endpoints';
+
+const API_URL = resolveApiUrl(process.env.NEXT_PUBLIC_API_URL);
 
 export class HttpError extends Error {
   constructor(public status: number, message = 'No se pudo completar la operación', public code?: string) { super(message); this.name = 'HttpError'; }

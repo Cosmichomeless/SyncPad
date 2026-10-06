@@ -37,8 +37,8 @@ flowchart LR
 
 Un solo origen hace que la cookie de sesión sea de primera parte (`SameSite=Lax`,
 `Secure`), que el WebSocket no necesite una configuración de CORS especial y que
-`NEXT_PUBLIC_API_URL` pueda ir vacío (URLs relativas). El detalle del contenedor
-combinado y de las variables está en #65 y #67 (pendiente en esta rama).
+`NEXT_PUBLIC_API_URL` pueda ir vacío (URLs relativas). Las variables están en la sección siguiente; el contenedor
+combinado se entrega en #67 (pendiente en esta rama).
 
 ## Costes y cuotas
 
@@ -69,6 +69,44 @@ con el contenedor desplegado antes de afirmar nada.
 - **Rendimiento**: el [benchmark #50](issues/050-benchmark.md) se midió sin red ni
   PostgreSQL remoto; en este hosting será peor. La demo es para dos o tres personas.
 
+## HTTPS, WSS, cookies y secretos (#65)
+
+**TLS lo termina Render.** El navegador habla `https://` y `wss://` con la plataforma, y
+dentro del contenedor el tráfico va en claro por `127.0.0.1` (Caddy con `auto_https off`
+escuchando en `$PORT`). Como la web, la API y `/ws` comparten origen, no hay certificados
+ni dominios que gestionar.
+
+El navegador llega a `wss://` sin configuración: con `NEXT_PUBLIC_WS_URL` vacío el cliente
+usa el esquema de la página (`https:` → `wss:`) y su `host`
+(`frontend/src/lib/endpoints.ts`); con `NEXT_PUBLIC_API_URL` vacío las peticiones son
+relativas.
+
+| Variable | Valor en producción | Tipo | Notas |
+| --- | --- | --- | --- |
+| `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL` | vacías | argumento de build, público | un origen; se incrustan en el bundle |
+| `CORS_ORIGIN` | `https://<servicio>.onrender.com` | configuración | origen exacto de la web; también lo exige el WebSocket (`403` si el `Origin` no coincide). El contenedor la deriva de `RENDER_EXTERNAL_URL` si no se define (#67) |
+| `COOKIE_SECURE` | `true` | configuración | la cookie de sesión y la de CSRF solo viajan por HTTPS |
+| `COOKIE_SAME_SITE` | `Lax` | configuración | primera parte: no hace falta `None` |
+| `DATABASE_URL` | cadena de conexión **directa** de Neon con `?sslmode=require` | **secreto** | el pool es persistente, así que no se usa el *pooler* |
+| `METRICS_TOKEN` | cadena aleatoria (`openssl rand -base64 32`) | **secreto** | sin ella `/metrics` responde 404 |
+| `SYNCPAD_RUN_MIGRATIONS` | `true` | configuración | el entrypoint migra antes de escuchar |
+
+### Dónde viven los secretos
+
+- **En el panel de Render**, como variables de entorno (`sync: false` en el *blueprint*,
+  así el valor no se escribe en `render.yaml`). Nunca en Git ni en un `ARG`/`ENV` del
+  Dockerfile.
+- `.gitignore` excluye `.env` y `.env.*` (salvo `.env.example`) y `.dockerignore` los deja
+  fuera de la imagen.
+- **Se comprueba**: `sh scripts/check-secrets.sh [IMAGEN…]` falla si hay un fichero de
+  entorno versionado, una URL de base de datos con contraseña y host remoto, una clave
+  privada o un token con aspecto de tal, una variable secreta con valor literal, y, para
+  cada imagen, secretos en `ENV`, ficheros `.env*` o URLs con credenciales en el historial
+  de capas. Lo ejecutan `scripts/check.sh` y CI (`backend.yml`, en `checks` sobre los
+  ficheros y en `image` sobre la imagen).
+- Si un secreto se filtrase, se rota (nueva contraseña en Neon, nuevo `METRICS_TOKEN`) y se
+  reinicia el servicio; borrar el commit no basta.
+
 ## Plan de copias y restauración de notas
 
 La fuente de verdad es PostgreSQL (`syncpad.note_updates` y `syncpad.note_snapshots`;
@@ -90,9 +128,9 @@ ver [architecture.md](architecture.md)). Plan:
 Los scripts `scripts/backup.sh` y `scripts/restore.sh` y su prueba con una nota de
 ejemplo se entregan en #66.
 
+
 ## Pendiente
 
-- HTTPS/WSS, cookies, CORS y secretos: #65.
 - Base de datos gestionada, migraciones y copias probadas: #66.
 - Configuración de despliegue y prueba con dos usuarios: #67.
 - Humo posterior al despliegue y recuperación: #68.
