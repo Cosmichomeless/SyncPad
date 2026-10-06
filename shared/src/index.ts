@@ -23,10 +23,29 @@ export type AuthUserResponse = {
   };
 };
 
+export type WorkspaceRole = 'OWNER' | 'MEMBER';
+
 export type WorkspaceSummary = {
   id: WorkspaceId;
   name: string;
   updatedAt: string;
+  /** The caller's role. Absent in copies cached before roles existed: treat that as MEMBER. */
+  role?: WorkspaceRole;
+};
+
+export type WorkspaceMember = {
+  userId: UserId;
+  email: string;
+  role: WorkspaceRole;
+  joinedAt: string;
+};
+
+/** A not-yet-accepted invitation. The token itself is never stored or listed: it is shown once, at creation. */
+export type PendingInvitation = {
+  id: string;
+  email: string;
+  expiresAt: string;
+  expired: boolean;
 };
 
 export type NoteSummary = {

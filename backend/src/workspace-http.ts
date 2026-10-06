@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AuthService } from './auth.js';
 import { getSessionToken } from './auth-http.js';
 import { hasValidCsrf } from './security.js';
-import { isWorkspaceId, type WorkspaceService } from './workspaces.js';
+import { InvitationConflictError, isUuid, isWorkspaceId, type WorkspaceService } from './workspaces.js';
 
 function sendJson(response: ServerResponse, status: number, body: unknown) {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -68,6 +68,10 @@ export async function handleWorkspaceRequest(
       const invitation = await workspaces.invite(parts[1], user.id, await readField(request, 'email'));
       sendJson(response, 201, { invitation });
     } catch (error) {
+      if (error instanceof InvitationConflictError) {
+        sendJson(response, 409, { error: { code: error.code, message: error.message } });
+        return true;
+      }
       const forbidden = error instanceof Error && error.message.includes('OWNER');
       sendJson(response, forbidden ? 403 : 400, { error: { code: forbidden ? 'FORBIDDEN' : 'INVALID_REQUEST', message: error instanceof Error ? error.message : 'Invalid invitation' } });
     }
@@ -84,10 +88,54 @@ export async function handleWorkspaceRequest(
       return true;
     }
     try {
+      if (!isUuid(parts[3])) throw new Error('Only an OWNER can remove this member');
       await workspaces.removeMember(parts[1], user.id, parts[3] as never);
       response.writeHead(204).end();
     } catch (error) {
       sendJson(response, 403, { error: { code: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Member cannot be removed' } });
+    }
+    return true;
+  }
+
+  if (parts[0] === 'workspaces' && parts.length === 3 && parts[2] === 'members' && request.method === 'GET') {
+    if (!isWorkspaceId(parts[1])) {
+      sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Workspace not found' } });
+      return true;
+    }
+    const members = await workspaces.listMembers(parts[1], user.id);
+    if (!members) sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Workspace not found' } });
+    else sendJson(response, 200, { members });
+    return true;
+  }
+
+  if (parts[0] === 'workspaces' && parts.length === 3 && parts[2] === 'invitations' && request.method === 'GET') {
+    if (!isWorkspaceId(parts[1])) {
+      sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Workspace not found' } });
+      return true;
+    }
+    try {
+      sendJson(response, 200, { invitations: await workspaces.listInvitations(parts[1], user.id) });
+    } catch (error) {
+      sendJson(response, 403, { error: { code: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Not allowed' } });
+    }
+    return true;
+  }
+
+  if (parts[0] === 'workspaces' && parts.length === 4 && parts[2] === 'invitations' && request.method === 'DELETE') {
+    if (!hasValidCsrf(request)) {
+      sendJson(response, 403, { error: { code: 'CSRF_REQUIRED', message: 'Valid CSRF token required' } });
+      return true;
+    }
+    if (!isWorkspaceId(parts[1])) {
+      sendJson(response, 404, { error: { code: 'NOT_FOUND', message: 'Workspace not found' } });
+      return true;
+    }
+    try {
+      if (!isUuid(parts[3])) throw new Error('Only an OWNER can revoke a pending invitation');
+      await workspaces.revokeInvitation(parts[1], user.id, parts[3]);
+      response.writeHead(204).end();
+    } catch (error) {
+      sendJson(response, 403, { error: { code: 'FORBIDDEN', message: error instanceof Error ? error.message : 'Invitation cannot be revoked' } });
     }
     return true;
   }
