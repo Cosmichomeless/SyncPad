@@ -17,6 +17,7 @@ import { handleNoteRequest } from './note-http.js';
 import type { NoteService } from './notes.js';
 import { isNoteId } from './notes.js';
 import type { SyncStore } from './sync-store.js';
+import { createRateLimiter, DEFAULT_LIMITS, type SyncLimits } from './limits.js';
 
 function cookieValue(header: string | undefined, name: string) {
   return header?.split(';').map((part) => part.trim()).find((part) => part.startsWith(name + '='))?.slice(name.length + 1);
@@ -64,7 +65,8 @@ function decode(value: string) {
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
 
-export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number } = {}) {
+export function createSyncServer(options: { auth?: AuthService; security?: SecurityConfig; workspaces?: WorkspaceService; notes?: NoteService; syncStore?: SyncStore; snapshotEvery?: number; limits?: Partial<SyncLimits> } = {}) {
+  const limits: SyncLimits = { ...DEFAULT_LIMITS, ...options.limits };
   const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     const origin = req.headers.origin;
@@ -160,6 +162,16 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     room.clients.clear();
   };
   let closing: Promise<void> | undefined;
+  /** A socket that has not answered the last ping is dead (or hung) and is dropped, freeing its room slot. */
+  const liveness = new WeakMap<WebSocket, boolean>();
+  const heartbeat = limits.heartbeatMs > 0 ? setInterval(() => {
+    for (const client of wss.clients) {
+      if (liveness.get(client) === false) { client.terminate(); continue; }
+      liveness.set(client, false);
+      try { client.ping(); } catch { client.terminate(); }
+    }
+  }, limits.heartbeatMs) : undefined;
+  heartbeat?.unref();
   server.on('connection', (socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
@@ -195,6 +207,8 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
       }
       wss.handleUpgrade(req, socket, head, (client) => {
         client.on('error', () => client.terminate());
+        liveness.set(client, true);
+        client.on('pong', () => liveness.set(client, true));
         if (!options.auth || !options.notes) return;
         const noteIdValue = new URL(req.url ?? '/ws', `http://${req.headers.host ?? 'localhost'}`).searchParams.get('noteId');
         const noteId = noteIdValue && isNoteId(noteIdValue) ? noteIdValue : undefined;
@@ -284,7 +298,16 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
           client.close(1011, 'Note storage unavailable');
           return undefined;
         });
+        const allowance = createRateLimiter(limits.messagesPerSecond, limits.messageBurst);
         client.on('message', (raw) => {
+          if (!allowance.take()) {
+            // Past its allowance the connection is cut before any work is queued; the client backs off and reconnects.
+            if (client.readyState === client.OPEN) {
+              client.send(JSON.stringify({ type: 'sync-error', code: 'rate-limited', retryable: true } satisfies ServerSyncMessage));
+              client.close(1008, 'Rate limit exceeded');
+            }
+            return;
+          }
           ready = ready.then(async (room) => {
             if (room) await handle(room, raw);
             return room;
@@ -302,6 +325,7 @@ export function createSyncServer(options: { auth?: AuthService; security?: Secur
     })().catch(() => rejectUpgrade(socket, 403));
   });
   function close(): Promise<void> {
+    clearInterval(heartbeat);
     closing ??= new Promise<void>((resolve, reject) => {
       const deadline = setTimeout(() => {
         for (const client of wss.clients) client.terminate();
