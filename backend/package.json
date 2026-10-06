@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
     "test:integration": "tsx --test --test-concurrency=1 --test-timeout=60000 integration/*.int.test.ts",
+    "smoke:journey": "tsx smoke/journey.ts",
     "bench": "tsx bench/run.mts"
   },
   "dependencies": {

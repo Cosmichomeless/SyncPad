@@ -15,6 +15,7 @@
     "src/**/*.ts",
     "tests/**/*.ts",
     "integration/**/*.ts",
+    "smoke/**/*.ts",
     "bench/**/*.mts"
   ]
 }
