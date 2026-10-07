@@ -24,10 +24,14 @@ enlazan la URL.
 
 ## Qué falta
 
-1. Capturas del despliegue en `docs/screenshots/` (hoy son las generadas con datos sembrados).
-2. Medir el arranque en frío y anotarlo en `docs/deployment.md`.
-3. Publicar la release `v1.0.0` con las notas y el caso de conflicto resuelto. Es una acción
-   pública: se hace solo con confirmación expresa.
+1. Medir el arranque en frío y anotarlo en `docs/deployment.md`.
+2. Publicar la release `v1.0.0` con `docs/releases/v1.0.0.md`. Es una acción pública: se hace solo con confirmación expresa.
+
+Las capturas del README se quedan como están (datos sembrados en local, con las mismas personas y notas en todas); no se suben capturas de la instancia pública para no llenar su base de datos de ejemplo.
+
+## Caso de conflicto
+
+`scripts/conflict-demo.mts`: dos réplicas sin conexión reemplazan la misma palabra y convergen conservando las dos versiones. No necesita servidor. Está en las notas de la release.
 
 ## Límites
 
