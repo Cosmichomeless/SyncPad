@@ -90,7 +90,7 @@ Más detalle en [`docs/architecture.md`](docs/architecture.md).
 - **Sin cifrado en reposo** de la copia local ni compactación del IndexedDB en el cliente.
 - **Sin CSP ni cabeceras de seguridad HTTP**; se asume que las añade el proxy de despliegue.
 - **Accesibilidad revisada con el árbol de Playwright**, no con VoiceOver, NVDA ni axe-core. El tema oscuro y el zoom no se han revisado.
-- **Despliegue de exposición**: Render + Neon gratuitos. HTTPS, `wss`, la cookie `Secure` y el rechazo de orígenes ajenos se comprobaron sobre la URL real con `scripts/smoke-public.mts` (10 de 10, 2026-10-07). El arranque en frío y las cuotas de RAM y CPU no se han medido; la `v1.0.0` está sin publicar.
+- **Despliegue de exposición**: Render + Neon gratuitos. HTTPS, `wss`, la cookie `Secure` y el rechazo de orígenes ajenos se comprobaron sobre la URL real con `scripts/smoke-public.mts` (10 de 10, 2026-10-07). El arranque en frío y las cuotas de RAM y CPU no se han medido.
 - **Plan gratuito**: una instancia que se duerme a los 15 min sin tráfico y una base de 0,5 GB; es un despliegue de exposición, no de producción.
 
 El seguimiento está en las [issues del repositorio](https://github.com/Cosmichomeless/SyncPad/issues). Lo que no figura aquí o allí no se promete.
@@ -133,7 +133,7 @@ docker-compose.yml   PostgreSQL + servidor + web
 
 - **Existe**: `backend/Dockerfile`, `frontend/Dockerfile` y `docker-compose.yml` para la pila completa, y el humo `scripts/smoke.sh` contra una instancia en marcha.
 - **Imagen y blueprint**: `deploy/Dockerfile` (un solo origen: Caddy delante de Next.js y del servidor), `render.yaml`, copias con `scripts/backup.sh` y `restore.sh`, y el humo `scripts/smoke-public.mts`. Plan: Render (gratis) + Neon (gratis); ver [`docs/deployment.md`](docs/deployment.md).
-- **Desplegado**: [https://syncpad-0xyk.onrender.com](https://syncpad-0xyk.onrender.com) (Render + Neon, plan gratuito). El humo público pasó 10 de 10 el 2026-10-07; la release `v1.0.0` está pendiente.
+- **Desplegado**: [https://syncpad-0xyk.onrender.com](https://syncpad-0xyk.onrender.com) (Render + Neon, plan gratuito). El humo público pasó 10 de 10 el 2026-10-07. Release publicada: [`v1.0.0`](https://github.com/Cosmichomeless/SyncPad/releases/tag/v1.0.0).
 
 ## Licencia
 
