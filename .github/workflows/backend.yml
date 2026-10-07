@@ -234,7 +234,9 @@ jobs:
 
       - name: Start the container
         run: |
+          # No capabilities and no new privileges, like Render: it caught Caddy's file capability (EPERM).
           docker run -d --name syncpad-deploy --network host \
+            --cap-drop=ALL --security-opt no-new-privileges \
             -e DATABASE_URL=postgres://syncpad:syncpad@127.0.0.1:5432/syncpad \
             -e CORS_ORIGIN=http://127.0.0.1:10000 \
             -e COOKIE_SECURE=false \

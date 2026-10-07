@@ -6,6 +6,11 @@
 ARG NODE_IMAGE=node:22.16-alpine
 
 FROM caddy:2-alpine AS caddy
+# The official binary carries the file capability cap_net_bind_service. Hosts that start containers
+# without it (Render) refuse to exec it with EPERM, and port $PORT is above 1024, so drop it.
+RUN apk add --no-cache libcap-utils \
+    && setcap -r /usr/bin/caddy \
+    && ! getcap /usr/bin/caddy | grep -q .
 
 # Backend: production dependencies and compiled output (same layout as backend/Dockerfile).
 FROM ${NODE_IMAGE} AS backend-prod-deps
