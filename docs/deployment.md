@@ -185,6 +185,14 @@ sirve la web y `/health` por el mismo puerto, el humo de dos clientes
 `ack`), un `Origin` ajeno recibe 403 en `/ws`, y `docker stop` cierra el WebSocket con 1001
 y sale con código 0. Memoria en reposo: ~83 MiB (no se ha medido bajo carga ni en Render).
 
+### Primer despliegue real (2026-10-07)
+
+Las migraciones se aplicaron en Neon (8), pero Caddy no arrancó: `spawn EPERM`. El binario
+oficial lleva la capability de fichero `cap_net_bind_service` y Render ejecuta sin ella. Se
+quita en `deploy/Dockerfile` (el puerto es 10000), y CI arranca ahora el contenedor con
+`--cap-drop=ALL --security-opt no-new-privileges` para que no vuelva a pasar. El aviso de `pg`
+sobre `sslmode=require` es solo informativo: ya lo trata como `verify-full`, que Neon cumple.
+
 ### No verificado hasta desplegar
 
 - Que Render defina `RENDER_EXTERNAL_URL` con la URL `https` pública (si no, definir
