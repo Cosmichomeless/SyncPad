@@ -1,0 +1,17 @@
+# Inside the container only: Render terminates TLS and forwards plain HTTP to $PORT, so Caddy
+# must not try to obtain certificates or open its admin API.
+{
+	auto_https off
+	admin off
+}
+
+:{$PORT} {
+	# What the sync server answers. Anything else is the Next.js app.
+	@sync path /auth/* /workspaces /workspaces/* /notes/* /invitations /invitations/* /health /metrics /ws
+	handle @sync {
+		reverse_proxy 127.0.0.1:3001
+	}
+	handle {
+		reverse_proxy 127.0.0.1:3000
+	}
+}

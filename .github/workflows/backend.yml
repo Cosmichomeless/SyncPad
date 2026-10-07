@@ -10,6 +10,8 @@ on:
       - 'backend/**'
       - 'shared/**'
       - 'scripts/**'
+      - 'deploy/**'
+      - 'frontend/**'
       - '.github/workflows/backend.yml'
   push:
     branches: [main]
@@ -17,6 +19,8 @@ on:
       - 'backend/**'
       - 'shared/**'
       - 'scripts/**'
+      - 'deploy/**'
+      - 'frontend/**'
       - '.github/workflows/backend.yml'
   workflow_dispatch:
 
@@ -191,3 +195,81 @@ jobs:
       - name: Container logs
         if: failure()
         run: docker logs syncpad-backend || true
+
+  # The single-origin image Render builds (deploy/Dockerfile): web, API and WebSocket on one port.
+  deploy-image:
+    name: Deployment image smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: syncpad
+          POSTGRES_USER: syncpad
+          POSTGRES_PASSWORD: syncpad
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syncpad -d syncpad"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16'
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            backend/package-lock.json
+
+      - name: Build the image
+        run: docker build -f deploy/Dockerfile -t syncpad-deploy .
+
+      - name: No secrets in the image
+        run: sh scripts/check-secrets.sh syncpad-deploy
+
+      - name: Start the container
+        run: |
+          docker run -d --name syncpad-deploy --network host \
+            -e DATABASE_URL=postgres://syncpad:syncpad@127.0.0.1:5432/syncpad \
+            -e CORS_ORIGIN=http://127.0.0.1:10000 \
+            -e COOKIE_SECURE=false \
+            syncpad-deploy
+          for attempt in $(seq 1 40); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' syncpad-deploy)
+            echo "attempt $attempt: $status"
+            [ "$status" = healthy ] && exit 0
+            [ "$status" = unhealthy ] && break
+            sleep 3
+          done
+          docker logs syncpad-deploy
+          exit 1
+
+      - name: Install dependencies for the smoke script
+        run: |
+          npm ci --prefix shared
+          npm ci --prefix backend
+
+      # Everything goes through Caddy on one port, as it does behind Render.
+      - name: Two-client edit through the single origin
+        run: npx tsx ../scripts/smoke-stack.mts
+        working-directory: backend
+        env:
+          SYNCPAD_API_URL: http://127.0.0.1:10000
+          SYNCPAD_ORIGIN: http://127.0.0.1:10000
+          SYNCPAD_WEB_URL: http://127.0.0.1:10000
+
+      - name: Graceful shutdown
+        run: |
+          docker stop syncpad-deploy
+          code=$(docker inspect --format '{{.State.ExitCode}}' syncpad-deploy)
+          echo "exit code: $code"
+          [ "$code" = 0 ]
+
+      - name: Container logs
+        if: failure()
+        run: docker logs syncpad-deploy || true

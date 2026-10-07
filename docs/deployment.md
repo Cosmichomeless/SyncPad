@@ -37,8 +37,8 @@ flowchart LR
 
 Un solo origen hace que la cookie de sesión sea de primera parte (`SameSite=Lax`,
 `Secure`), que el WebSocket no necesite una configuración de CORS especial y que
-`NEXT_PUBLIC_API_URL` pueda ir vacío (URLs relativas). Las variables están en la sección siguiente; el contenedor
-combinado se entrega en #67 (pendiente en esta rama).
+`NEXT_PUBLIC_API_URL` pueda ir vacío (URLs relativas). Las variables están en la sección
+siguiente; el contenedor combinado está descrito en [Contenedor y blueprint](#contenedor-y-blueprint-67).
 
 ## Costes y cuotas
 
@@ -152,7 +152,46 @@ DATABASE_URL='<url de la base vacía>' sh scripts/restore.sh backups/syncpad-…
   con `sslmode=require` y guardarla solo como variable `DATABASE_URL` del servicio.
 
 
-## Pendiente
+## Contenedor y blueprint (#67)
 
-- Configuración de despliegue y prueba con dos usuarios: #67.
+- **`deploy/Dockerfile`**: una sola imagen (~99 MB) con el servidor de sincronización, Next.js
+  (`standalone`, compilado con `NEXT_PUBLIC_*` vacíos: el bundle no contiene ningún host) y
+  Caddy copiado de `caddy:2-alpine`.
+- **`deploy/supervisor.mjs`** (PID 1): exige `DATABASE_URL` y una URL pública, aplica las
+  migraciones, arranca backend (`127.0.0.1:3001`), web (`127.0.0.1:3000`) y Caddy (`$PORT`).
+  Si cualquiera muere, el contenedor termina para que Render lo reinicie; `SIGTERM` se
+  reenvía y los WebSockets se cierran con 1001.
+- **`deploy/Caddyfile`**: `auto_https off` (Render ya termina TLS); `/auth`, `/workspaces`,
+  `/notes`, `/invitations`, `/health`, `/metrics` y `/ws` van al backend; el resto, a Next.js.
+- **`render.yaml`**: servicio `docker` en plan `free`, `healthCheckPath: /health`,
+  `DATABASE_URL` como `sync: false` (se escribe en el panel) y `METRICS_TOKEN` generado por
+  Render. `CORS_ORIGIN` se deduce de `RENDER_EXTERNAL_URL`; define `CORS_ORIGIN` solo si
+  usas un dominio propio.
+
+### Pasos manuales para desplegar
+
+1. **Neon**: crear el proyecto y copiar la cadena directa (ver arriba).
+2. **Render**: *New → Blueprint*, elegir este repositorio y la rama a desplegar
+   (`render.yaml` en la raíz), y pegar `DATABASE_URL` cuando lo pida.
+3. Esperar al primer despliegue (compila las dos aplicaciones; varios minutos) y abrir la
+   URL `https://<nombre>.onrender.com`.
+4. Ejecutar el humo posterior al despliegue de #68 contra esa URL.
+
+### Verificado en local (2026-10-07)
+
+Con Docker y PostgreSQL 16 local, sin Render: la imagen compila, queda `healthy` en ~8 s,
+sirve la web y `/health` por el mismo puerto, el humo de dos clientes
+(`scripts/smoke-stack.mts`) pasa **a través de Caddy** (edición de A recibida por B tras el
+`ack`), un `Origin` ajeno recibe 403 en `/ws`, y `docker stop` cierra el WebSocket con 1001
+y sale con código 0. Memoria en reposo: ~83 MiB (no se ha medido bajo carga ni en Render).
+
+### No verificado hasta desplegar
+
+- Que Render defina `RENDER_EXTERNAL_URL` con la URL `https` pública (si no, definir
+  `CORS_ORIGIN`).
+- Cookie `Secure` y WSS sobre el dominio real, y el comportamiento al despertar del sueño
+  (~1 min de arranque en frío): lo cubre el humo de #68.
+- Cuotas de RAM y CPU del plan gratuito.
+
+## Pendiente
 - Humo posterior al despliegue y recuperación: #68.
