@@ -7,8 +7,9 @@ arquitectura completa está en [architecture.md](architecture.md).
 
 ## Estado de la demo pública
 
-- **URL pública de la demo: pendiente de #64–#67.** Aún no hay decisión de
-  hosting, así que este guion se ejecuta en local.
+- **URL pública de la demo: pendiente de desplegar.** El despliegue gratuito
+  (Render + Neon) está preparado y ensayado en local
+  ([deployment.md](deployment.md)); hasta publicarlo, este guion se ejecuta en local.
 - **Release v1.0.0: pendiente.**
 - Capturas: hay cinco en [`screenshots/`](screenshots/), generadas con datos
   sembrados (véase el README). La grabación de pantalla sigue pendiente.
@@ -166,7 +167,7 @@ se anuncia como región viva. Respaldo: e2e `keyboard-accessibility.spec.ts`
   benchmark con muchos editores concurrentes por encima del presupuesto
   ([#50](issues/050-benchmark.md)); ver
   [Límites conocidos](architecture.md#límites-conocidos).
-- Demo pública y release: pendientes de #64–#67 (hosting) y de v1.0.0.
+- Demo pública y release v1.0.0: pendientes de crear las cuentas y desplegar ([deployment.md](deployment.md)).
 
 ## Tabla de respaldo automatizado
 

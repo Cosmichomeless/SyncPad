@@ -60,10 +60,11 @@ El workflow no se puede ejecutar fuera de GitHub, así que se comprobó por part
 
 ## Límites
 
-- El job `image` no se ha reproducido tal cual: usa red `host`, que Docker
-  Desktop en macOS no ofrece igual, y el puerto 5432 local está ocupado. Su
-  camino equivalente (imagen + Compose + humo de dos clientes) se probó en #59 y
-  #60, pero la primera ejecución real del job será en GitHub.
+- El job `image` no se pudo reproducir tal cual en local (usa red `host`, que
+  Docker Desktop en macOS no ofrece igual, y el puerto 5432 local estaba
+  ocupado). Su primera ejecución real fue en GitHub, en la PR #96, y terminó en
+  verde (≈ 48 s). Más tarde se añadió el job `deploy-image` (#67), que sigue el
+  mismo esquema para la imagen de despliegue.
 - El filtro de rutas hace que el check no aparezca en PRs que no tocan esas
   carpetas; si se marca como obligatorio en la protección de rama, esas PRs
   quedarían en espera (mismo caso que en #61).

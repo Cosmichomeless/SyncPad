@@ -4,7 +4,7 @@
 
 **Notas colaborativas que se editan entre varias personas y siguen funcionando sin conexión.**
 
-![Estado](https://img.shields.io/badge/estado-v1.0.0%20pendiente-orange)
+![Estado](https://img.shields.io/badge/estado-listo%20para%20desplegar-orange)
 ![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![Yjs](https://img.shields.io/badge/CRDT-Yjs-6C4AB6)
@@ -29,7 +29,7 @@ SyncPad es un editor de notas en tiempo real construido sobre un CRDT (Yjs). Dem
 ## Probarlo en un comando
 
 > [!NOTE]
-> No hay demo pública desplegada: el hosting sigue sin decidir ([#64–#67](docs/issues/README.md)). Se ejecuta en local.
+> Todavía no hay demo pública: el despliegue gratuito (Render + Neon) está preparado y ensayado en local, pero falta crear las cuentas y publicarlo ([`docs/deployment.md`](docs/deployment.md)). Mientras tanto se ejecuta en local.
 
 ```sh
 docker compose up --build   # y abrir http://127.0.0.1:3000
@@ -88,18 +88,18 @@ Más detalle en [`docs/architecture.md`](docs/architecture.md).
 - **Sin cifrado en reposo** de la copia local ni compactación del IndexedDB en el cliente.
 - **Sin CSP ni cabeceras de seguridad HTTP**; se asume que las añade el proxy de despliegue.
 - **Accesibilidad revisada con el árbol de Playwright**, no con VoiceOver, NVDA ni axe-core. El tema oscuro y el zoom no se han revisado.
-- **El job `image` de CI** (construye el Dockerfile y ejecuta el humo) no se pudo ejecutar en local; su primera ejecución real será en GitHub.
-- **Sin despliegue real ni release**: no hay URL pública y la `v1.0.0` está pendiente.
+- **Sin despliegue real ni release**: no hay URL pública, así que HTTPS, WSS, la cookie `Secure` y el arranque en frío del plan gratuito (~1 min) se han ensayado solo en local; la `v1.0.0` está pendiente de publicarlo.
+- **Plan gratuito**: una instancia que se duerme a los 15 min sin tráfico y una base de 0,5 GB; es un despliegue de exposición, no de producción.
 
 El seguimiento está en las [issues del repositorio](https://github.com/Cosmichomeless/SyncPad/issues). Lo que no figura aquí o allí no se promete.
 
 ## Calidad
 
-- **Pruebas unitarias y de componentes**: 145 en el backend, 36 en `shared/`, 157 en el frontend y 2 del entrypoint compilado.
-- **Integración con PostgreSQL y WebSocket**: 16 pruebas sobre una base de datos nueva por prueba (migraciones, permisos, borrado, reinicio y reconstrucción).
+- **Pruebas unitarias y de componentes**: 146 en el backend, 36 en `shared/`, 161 en el frontend y 2 del entrypoint compilado.
+- **Integración con PostgreSQL y WebSocket**: 18 pruebas sobre una base de datos nueva por prueba (migraciones, permisos, borrado, reinicio, reconstrucción y copia de seguridad restaurada).
 - **End-to-end**: 17 pruebas Playwright (Chromium) con tres clientes y reinicio del servidor. **No se ejecutan en CI**: se lanzan en local con `cd e2e && npx playwright test`.
-- **Humo**: `sh scripts/smoke.sh` levanta el stack y ejecuta 8 comprobaciones con dos clientes sincronizando una nota.
-- **CI** en GitHub Actions: `frontend.yml` (lint, tipos, pruebas, build) y `backend.yml` (lint, tipos, pruebas, migraciones, integración y un job `image` que construye el contenedor y repite la edición entre dos clientes). Las comprobaciones estáticas y unitarias se lanzan en local con `bash scripts/check.sh`.
+- **Humo**: `sh scripts/smoke.sh` levanta el stack y ejecuta 8 comprobaciones con dos clientes sincronizando una nota; `scripts/smoke-public.mts <url>` repite el recorrido contra una URL pública (10 comprobaciones, incluida la cookie `Secure`).
+- **CI** en GitHub Actions: `frontend.yml` (lint, tipos, pruebas, build) y `backend.yml` (lint, tipos, pruebas, migraciones, integración y un job `image` que construye el contenedor y repite la edición entre dos clientes, y un job `deploy-image` que hace lo mismo con la imagen de un solo origen que se despliega). Las comprobaciones estáticas y unitarias se lanzan en local con `bash scripts/check.sh`.
 
 ## Documentación
 
@@ -107,6 +107,7 @@ El seguimiento está en las [issues del repositorio](https://github.com/Cosmicho
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | Componentes, protocolo, modelo de datos, seguridad y límites |
 | [`docs/development.md`](docs/development.md) | Desarrollo local, comandos y notas por issue |
+| [`docs/deployment.md`](docs/deployment.md) | Hosting elegido, cuotas, HTTPS y secretos, copias, despliegue paso a paso y recuperación |
 | [`docs/demo-script.md`](docs/demo-script.md) | Guion para recorrer el producto con dos navegadores |
 | [`docs/issues/`](docs/issues/README.md) | Un documento por issue: objetivo, decisiones, verificación y límites |
 | [`.env.example`](.env.example) | Variables de entorno con sus valores locales |
@@ -118,7 +119,9 @@ backend/    Servidor Node.js (HTTP + WebSocket) y migraciones SQL
 frontend/   Next.js: editor, cliente de sincronización, IndexedDB y service worker
 shared/     Contratos comunes: esquema de documento v1 y política de rich text
 e2e/        Pruebas Playwright y generador de las capturas
-scripts/    check.sh, smoke.sh (humo local), smoke-stack.mts (humo del contenedor en CI)
+scripts/    check.sh, smoke.sh y smoke-stack.mts (humo local y de CI), smoke-public.mts (humo de la URL pública), backup.sh y restore.sh
+deploy/     Imagen única (web + API + Caddy) para el hosting gratuito
+render.yaml Blueprint de Render
 docs/       Arquitectura, guion de demo, desarrollo, capturas y una nota por issue
 .github/    Workflows de CI del frontend y del backend
 docker-compose.yml   PostgreSQL + servidor + web
@@ -127,7 +130,8 @@ docker-compose.yml   PostgreSQL + servidor + web
 ## Despliegue
 
 - **Existe**: `backend/Dockerfile`, `frontend/Dockerfile` y `docker-compose.yml` para la pila completa, y el humo `scripts/smoke.sh` contra una instancia en marcha.
-- **No existe**: ninguna instancia pública, dominio, HTTPS ni configuración de producción verificada. Está pendiente de [#64–#68](docs/issues/README.md).
+- **Preparado y ensayado en local**: `deploy/Dockerfile` (un solo origen: Caddy delante de Next.js y del servidor), `render.yaml`, copias con `scripts/backup.sh` y `restore.sh`, y el humo `scripts/smoke-public.mts`. Plan: Render (gratis) + Neon (gratis); ver [`docs/deployment.md`](docs/deployment.md).
+- **No existe**: ninguna instancia pública ni release; HTTPS, WSS y el arranque en frío solo se pueden comprobar sobre la URL real.
 
 ## Licencia
 

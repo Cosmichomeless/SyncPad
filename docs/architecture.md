@@ -6,7 +6,7 @@ servidor, y todas las réplicas convergen al mismo texto aunque alguien haya
 estado sin red.
 
 Este documento describe lo implementado y verificable en el código. Lo que
-depende del despliegue está marcado como **pendiente de #64–#67**; lo que no se
+depende del despliegue real está marcado como **pendiente de publicar** (ver [Despliegue y demo pública](#despliegue-y-demo-pública)); lo que no se
 ha podido comprobar se declara en [Límites conocidos](#límites-conocidos). El
 detalle de cada pieza está en el [índice de documentos por issue](issues/README.md).
 Para ver el producto en funcionamiento, el [guion de demo](demo-script.md).
@@ -329,12 +329,12 @@ etiquetas ni contenido, emails o cookies en los logs.
   instancias.
 - **Cabeceras de seguridad HTTP** (CSP, `X-Content-Type-Options`, etc.): no se
   encontraron configuradas ni en `backend/src` ni en `frontend/next.config.ts`;
-  podrían añadirse en el proxy de despliegue (pendiente de #64–#67).
+  pueden añadirse en el Caddyfile de `deploy/` (no se han añadido).
 - **Política de contraseñas mínima** (8 caracteres). No se ha verificado para
   este documento que exista limitación de intentos en el login.
 - **Un solo origen CORS** y cookies de sesión compartidas entre frontend y
-  backend: el despliegue debe decidir dominios y `SameSite` (pendiente de
-  #64–#67).
+  backend: el despliegue gratuito lo resuelve sirviendo web, API y `/ws` desde un único
+  origen (`SameSite=Lax`, `Secure`; ver [deployment.md](deployment.md)).
 - **Documentación por issue** ([#57 en adelante](issues/README.md)) pendiente de
   añadir al índice.
 - La nota «límite conocido» sobre la recomprobación de permisos WebSocket que
@@ -374,13 +374,19 @@ Pruebas del servidor destacadas, por tema: sincronización (`ws-sync`,
 
 ## Despliegue y demo pública
 
-**Pendiente de #64–#67.** Aún no hay decisión de hosting, por lo que este
-documento no afirma ninguna URL pública, dominio, configuración de producción
-verificada ni release. Cuando exista, hay que documentar aquí:
+Decisión (#64), detalle y cuotas en [deployment.md](deployment.md):
 
-- URL de la demo pública y de los servicios (pendiente de #64–#67).
-- Variables de entorno de producción (`CORS_ORIGIN`, `COOKIE_SECURE`,
-  `COOKIE_SAME_SITE`, `DATABASE_URL`, `METRICS_TOKEN`) y topología de dominios.
-- Comprobaciones de humo posteriores al despliegue (#68): `GET /health`, registro
-  y login, edición entre dos clientes y reconexión.
-- Release v1.0.0 (pendiente).
+- **Topología**: un servicio Docker gratuito de Render con tres procesos (servidor de
+  sincronización, Next.js y Caddy) detrás de un único puerto, y PostgreSQL en Neon.
+  Render termina TLS, así que el navegador ve un solo origen HTTPS/WSS.
+- **Cookies y CORS**: al ser primera parte, `SameSite=Lax` + `Secure`; `CORS_ORIGIN` es la
+  URL pública (se deduce de `RENDER_EXTERNAL_URL`). El cliente usa URLs relativas cuando
+  `NEXT_PUBLIC_API_URL` y `NEXT_PUBLIC_WS_URL` van vacíos (#65).
+- **Secretos**: solo `DATABASE_URL` y `METRICS_TOKEN`, en el panel del hosting;
+  `scripts/check-secrets.sh` lo vigila en Git y en las imágenes.
+- **Copias**: `scripts/backup.sh` y `restore.sh`, probados con una nota real (#66).
+- **Humo posterior**: `scripts/smoke-public.mts <url>` (#68).
+
+**Pendiente**: crear las cuentas de Render y Neon, desplegar, ejecutar el humo sobre la URL
+real, anotar aquí la URL de la demo y publicar la release v1.0.0 (#69). Hasta entonces,
+nada de lo anterior afirma una instancia pública.
