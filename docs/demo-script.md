@@ -105,6 +105,9 @@ del servidor, `three-clients-journey.spec.ts`
 3. Reconecta B. No gana ninguna de las dos: se conservan ambas versiones (por
    ejemplo «lobo» y «loro» juntas) y las dos ventanas ven lo mismo.
 
+Sin navegadores: `cd backend && npx tsx ../scripts/conflict-demo.mts` repite el
+mismo caso con dos réplicas.
+
 Mensaje a transmitir: no hay «último gana» ni se pierde trabajo; la fusión es
 determinista. Las reglas, con sus límites, están en
 [#38](issues/038-merge-rules.md); la convergencia se prueba por propiedades en
