@@ -4,14 +4,14 @@
 
 **Notas colaborativas que se editan entre varias personas y siguen funcionando sin conexión.**
 
-![Estado](https://img.shields.io/badge/estado-listo%20para%20desplegar-orange)
+![Estado](https://img.shields.io/badge/estado-demo%20en%20l%C3%ADnea-brightgreen)
 ![Node.js](https://img.shields.io/badge/Node.js-22-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 ![Yjs](https://img.shields.io/badge/CRDT-Yjs-6C4AB6)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)
 ![Licencia](https://img.shields.io/badge/licencia-MIT-blue)
 
-[Probarlo](#probarlo-en-un-comando) · [Capturas](#capturas) · [Arquitectura](#arquitectura) · [Limitaciones](#limitaciones-conocidas) · [Documentación](#documentación)
+[Demo](https://syncpad-0xyk.onrender.com) · [Probarlo](#probarlo-en-un-comando) · [Capturas](#capturas) · [Arquitectura](#arquitectura) · [Limitaciones](#limitaciones-conocidas) · [Documentación](#documentación)
 
 </div>
 
@@ -29,7 +29,9 @@ SyncPad es un editor de notas en tiempo real construido sobre un CRDT (Yjs). Dem
 ## Probarlo en un comando
 
 > [!NOTE]
-> Todavía no hay demo pública: el despliegue gratuito (Render + Neon) está preparado y ensayado en local, pero falta crear las cuentas y publicarlo ([`docs/deployment.md`](docs/deployment.md)). Mientras tanto se ejecuta en local.
+> Demo pública en el plan gratuito de Render: **https://syncpad-0xyk.onrender.com**. La instancia se duerme a los 15 minutos sin tráfico, así que la primera visita puede tardar cerca de un minuto. Es una demo de exposición: los datos no son privados ni se garantizan.
+
+También se ejecuta en local:
 
 ```sh
 docker compose up --build   # y abrir http://127.0.0.1:3000
@@ -88,7 +90,7 @@ Más detalle en [`docs/architecture.md`](docs/architecture.md).
 - **Sin cifrado en reposo** de la copia local ni compactación del IndexedDB en el cliente.
 - **Sin CSP ni cabeceras de seguridad HTTP**; se asume que las añade el proxy de despliegue.
 - **Accesibilidad revisada con el árbol de Playwright**, no con VoiceOver, NVDA ni axe-core. El tema oscuro y el zoom no se han revisado.
-- **Sin despliegue real ni release**: no hay URL pública, así que HTTPS, WSS, la cookie `Secure` y el arranque en frío del plan gratuito (~1 min) se han ensayado solo en local; la `v1.0.0` está pendiente de publicarlo.
+- **Despliegue de exposición**: Render + Neon gratuitos. HTTPS, `wss`, la cookie `Secure` y el rechazo de orígenes ajenos se comprobaron sobre la URL real con `scripts/smoke-public.mts` (10 de 10, 2026-10-07). El arranque en frío y las cuotas de RAM y CPU no se han medido; la `v1.0.0` está sin publicar.
 - **Plan gratuito**: una instancia que se duerme a los 15 min sin tráfico y una base de 0,5 GB; es un despliegue de exposición, no de producción.
 
 El seguimiento está en las [issues del repositorio](https://github.com/Cosmichomeless/SyncPad/issues). Lo que no figura aquí o allí no se promete.
@@ -130,8 +132,8 @@ docker-compose.yml   PostgreSQL + servidor + web
 ## Despliegue
 
 - **Existe**: `backend/Dockerfile`, `frontend/Dockerfile` y `docker-compose.yml` para la pila completa, y el humo `scripts/smoke.sh` contra una instancia en marcha.
-- **Preparado y ensayado en local**: `deploy/Dockerfile` (un solo origen: Caddy delante de Next.js y del servidor), `render.yaml`, copias con `scripts/backup.sh` y `restore.sh`, y el humo `scripts/smoke-public.mts`. Plan: Render (gratis) + Neon (gratis); ver [`docs/deployment.md`](docs/deployment.md).
-- **No existe**: ninguna instancia pública ni release; HTTPS, WSS y el arranque en frío solo se pueden comprobar sobre la URL real.
+- **Imagen y blueprint**: `deploy/Dockerfile` (un solo origen: Caddy delante de Next.js y del servidor), `render.yaml`, copias con `scripts/backup.sh` y `restore.sh`, y el humo `scripts/smoke-public.mts`. Plan: Render (gratis) + Neon (gratis); ver [`docs/deployment.md`](docs/deployment.md).
+- **Desplegado**: [https://syncpad-0xyk.onrender.com](https://syncpad-0xyk.onrender.com) (Render + Neon, plan gratuito). El humo público pasó 10 de 10 el 2026-10-07; la release `v1.0.0` está pendiente.
 
 ## Licencia
 

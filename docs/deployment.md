@@ -193,13 +193,21 @@ quita en `deploy/Dockerfile` (el puerto es 10000), y CI arranca ahora el contene
 `--cap-drop=ALL --security-opt no-new-privileges` para que no vuelva a pasar. El aviso de `pg`
 sobre `sslmode=require` es solo informativo: ya lo trata como `verify-full`, que Neon cumple.
 
-### No verificado hasta desplegar
+### Verificado en el despliegue real (2026-10-07)
 
-- Que Render defina `RENDER_EXTERNAL_URL` con la URL `https` pública (si no, definir
-  `CORS_ORIGIN`).
-- Cookie `Secure` y WSS sobre el dominio real, y el comportamiento al despertar del sueño
-  (~1 min de arranque en frío): lo cubre el humo de #68.
-- Cuotas de RAM y CPU del plan gratuito.
+URL: https://syncpad-0xyk.onrender.com. `scripts/smoke-public.mts` pasó 10 de 10: `/health`, la web por el mismo origen,
+cookie `HttpOnly`, `SameSite=Lax` y `Secure`, WebSocket por `wss`, edición con `ack`, edición
+recibida por un segundo navegador, el texto tras desconectar todo y volver a entrar, y un
+`Origin` ajeno rechazado con 403. Con esto queda comprobado que el origen público derivado
+de Render se acepta. Las pruebas dejaron cuentas de humo en la base de Neon.
+
+Durante el arranque Caddy ya escucha mientras el servidor y Next.js terminan de levantar, y
+Render ve unos segundos de 502 en `/health` antes de dar el servicio por vivo (~20 s).
+
+### No verificado
+
+- El arranque en frío tras dormirse (~1 min según la documentación de Render): no se ha medido.
+- Las cuotas de RAM y CPU del plan gratuito bajo carga.
 
 ## Humo posterior al despliegue (#68)
 
@@ -246,4 +254,4 @@ reiniciar; `METRICS_TOKEN` se regenera borrando la variable y volviendo a sincro
 blueprint. Borrar el commit que lo filtró no basta.
 
 ## Pendiente
-- Despliegue real, URL pública y release `v1.0.0`: #69 (requiere las cuentas de Render y Neon).
+- Release `v1.0.0` y capturas del despliegue: #69.
