@@ -13,13 +13,13 @@ import RichPreview from './rich-preview';
 import { encodeCursor, groupParticipants, remoteSelections, type Participant, type RemoteSelection } from '../lib/presence';
 import { readBlocks, removeLink, setLink, toggleBold, toggleList, type Block } from '../lib/rich-text';
 import { deleteLocalNote, persistNote } from '../lib/note-persistence';
+import { resolveWsUrl } from '../lib/endpoints';
 import { HttpError, NetworkError, request, shouldHandleRequestFailure } from '../lib/api-request';
 import { describeAcceptError, readInviteToken } from '../lib/invitations';
 import { establishOfflineIdentity, invalidateOfflineIdentity, isCurrentIdentity, isOfflineIdentityLocked, readOfflineGeneration, readOfflineIdentity, subscribeOfflineIdentity, type OfflineIdentity } from '../lib/offline-session';
 import { clearUserMetadata, discardOrphan, markVisited, readNotes, readOrphans, readVisitedNoteIds, readWorkspaces, removeWorkspace, retireNote, writeNotes, writeWorkspaces } from '../lib/offline-metadata';
 
 const INVITE_STORAGE_KEY = 'syncpad.pendingInvite';
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://127.0.0.1:3001/ws';
 
 export default function Home() {
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
@@ -389,7 +389,7 @@ export default function Home() {
       const current = () => !cancelled && isCurrentIdentity(identity);
       sync = createNoteSync({
         document,
-        url: `${WS_URL}?noteId=${noteId}`,
+        url: `${resolveWsUrl(process.env.NEXT_PUBLIC_WS_URL, window.location)}?noteId=${noteId}`,
         onState: (state) => { if (current()) setSyncState(state); },
         onPending: (value) => {
           unacknowledged = value;

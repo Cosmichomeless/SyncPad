@@ -68,6 +68,11 @@ jobs:
         run: npm ci
         working-directory: backend
 
+      # Tracked files hold no environment file and no credentialed remote database URL (#65).
+      - name: No secrets in Git
+        run: sh scripts/check-secrets.sh
+        working-directory: .
+
       - name: Lint
         run: npm run lint
         working-directory: backend
@@ -142,6 +147,9 @@ jobs:
 
       - name: Build the image
         run: docker build -f backend/Dockerfile -t syncpad-backend .
+
+      - name: No secrets in the image
+        run: sh scripts/check-secrets.sh syncpad-backend
 
       # Host networking lets the container reach the job's PostgreSQL service on 127.0.0.1:5432.
       # The entrypoint applies the migrations before the server starts listening.

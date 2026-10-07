@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+sh scripts/check-secrets.sh
 npm --prefix backend test
 npm --prefix backend run lint
 npm --prefix backend run typecheck
