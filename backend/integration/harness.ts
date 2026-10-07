@@ -52,11 +52,8 @@ export type CleanDatabase = {
   migrationOutput: string;
 };
 
-/**
- * A database that did not exist a moment ago, migrated by the real `migrate` entry point and
- * dropped when the test ends. Nothing a test does can see or disturb the developer's own data.
- */
-export async function createCleanDatabase(t: TestContext): Promise<CleanDatabase> {
+/** A database with nothing in it, dropped when the test ends: the target of a restore. */
+export async function createEmptyDatabase(t: TestContext): Promise<Omit<CleanDatabase, 'migrationOutput'>> {
   const name = `syncpad_it_${process.pid}_${randomBytes(4).toString('hex')}`;
   const admin = new pg.Client({ connectionString: ADMIN_DATABASE_URL });
   try {
@@ -81,8 +78,16 @@ export async function createCleanDatabase(t: TestContext): Promise<CleanDatabase
     await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
     await admin.end();
   });
-  const migrated = await run(TSX, ['src/migrate.ts'], { cwd: BACKEND, env: { ...process.env, DATABASE_URL: url } });
-  return { url, pool, migrationOutput: migrated.stdout.trim() };
+  return { url, pool };
+}
+
+/**
+ * A database that did not exist a moment ago, migrated by the real `migrate` entry point and
+ * dropped when the test ends. Nothing a test does can see or disturb the developer's own data.
+ */
+export async function createCleanDatabase(t: TestContext): Promise<CleanDatabase> {
+  const database = await createEmptyDatabase(t);
+  return { ...database, migrationOutput: await migrateAgain(database.url) };
 }
 
 export async function migrateAgain(databaseUrl: string) {
