@@ -15,17 +15,21 @@ release `v1.0.0` con un caso reproducible de conflicto resuelto.
   dos réplicas editan sin conexión y convergen ([guion de demo](../demo-script.md), pruebas
   `ws-persistence` e integración de tres clientes con reinicio).
 
-## Qué falta (requiere acciones fuera del repositorio)
+## Despliegue real (2026-10-07)
 
-1. Crear las cuentas de Render y Neon y desplegar con `render.yaml`
-   ([pasos](../deployment.md#pasos-manuales-para-desplegar)).
-2. Ejecutar `scripts/smoke-public.mts` sobre la URL real y corregir lo que falle.
-3. Poner la URL en el README (callout y barra de enlaces), cambiar el badge de estado y
-   añadir las capturas del despliegue a `docs/screenshots/`.
-4. Publicar la release `v1.0.0` con las notas y el caso de conflicto resuelto. Es una acción
+Desplegado en https://syncpad-0xyk.onrender.com (Render + Neon, plan gratuito). El primer intento falló por la capability de
+fichero de Caddy (`spawn EPERM`, arreglado en #101 y vigilado ahora en CI). Con el segundo,
+`scripts/smoke-public.mts` pasó 10 de 10. README, badge, guion de demo y arquitectura
+enlazan la URL.
+
+## Qué falta
+
+1. Capturas del despliegue en `docs/screenshots/` (hoy son las generadas con datos sembrados).
+2. Medir el arranque en frío y anotarlo en `docs/deployment.md`.
+3. Publicar la release `v1.0.0` con las notas y el caso de conflicto resuelto. Es una acción
    pública: se hace solo con confirmación expresa.
 
 ## Límites
 
-Mientras 1–4 no se hagan, #69 queda abierta: la documentación es honesta con ese estado, pero
-no hay demo ni release.
+Es un despliegue de exposición en plan gratuito: se duerme sin tráfico, tiene 0,5 GB de base de
+datos y sus datos no son privados. #69 sigue abierta hasta publicar la release.

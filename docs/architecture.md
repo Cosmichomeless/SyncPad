@@ -387,6 +387,5 @@ Decisión (#64), detalle y cuotas en [deployment.md](deployment.md):
 - **Copias**: `scripts/backup.sh` y `restore.sh`, probados con una nota real (#66).
 - **Humo posterior**: `scripts/smoke-public.mts <url>` (#68).
 
-**Pendiente**: crear las cuentas de Render y Neon, desplegar, ejecutar el humo sobre la URL
-real, anotar aquí la URL de la demo y publicar la release v1.0.0 (#69). Hasta entonces,
-nada de lo anterior afirma una instancia pública.
+**Desplegado** el 2026-10-07 en https://syncpad-0xyk.onrender.com; el humo público pasó 10 de 10 (detalle y lo que sigue
+sin medir en [deployment.md](deployment.md)). **Pendiente**: la release v1.0.0 (#69).
